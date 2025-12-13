@@ -1,0 +1,20 @@
+{
+  "name": "minecraft-8",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "simplex-noise": "^4.0.3",
+    "three": "^0.175.0"
+  },
+  "devDependencies": {
+    "vite": "^6.2.4"
+  }
+}

@@ -1,0 +1,107 @@
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars */
+}
+
+canvas {
+    display: block; /* Remove extra space below canvas */
+}
+
+#instructions {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 20px;
+    border-radius: 5px;
+    text-align: center;
+    font-family: sans-serif;
+    font-size: 1.2em;
+    cursor: pointer; /* Indicate it's clickable */
+}
+
+#selected-block-ui {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    padding: 10px 15px;
+    border-radius: 3px;
+    font-family: sans-serif;
+    font-size: 1em;
+} 
+
+#fps-display {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-family: sans-serif;
+    font-size: 12px;
+    background-color: rgba(0, 0, 0, 0.4);
+    padding: 4px 6px;
+    border-radius: 3px;
+    z-index: 20;
+}
+
+#auth-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+#auth-box {
+    background-color: #222;
+    color: #fff;
+    padding: 20px 24px;
+    border-radius: 6px;
+    min-width: 260px;
+    font-family: sans-serif;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.6);
+}
+
+#auth-box h2 {
+    margin: 0 0 12px;
+}
+
+#auth-box input {
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background-color: #111;
+    color: #fff;
+}
+
+#auth-buttons {
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+#auth-buttons button {
+    margin-right: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    background-color: #3a7bd5;
+    color: white;
+}
+
+#auth-buttons button:hover {
+    background-color: #2f63aa;
+}
+
+#auth-status {
+    min-height: 1.2em;
+    font-size: 0.9em;
+    margin-top: 4px;
+}
