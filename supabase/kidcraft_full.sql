@@ -1,0 +1,3 @@
+-- KidCraft Supabase SQL (FULL)
+-- NOTE: I couldn't find the previously generated full schema file in this workspace.
+-- Paste your latest schema+seed SQL here (worlds/materials/player_state/world_blocks/block_updates + RLS + realtime).

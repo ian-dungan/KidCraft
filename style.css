@@ -6,6 +6,8 @@ html, body {
   font-family: system-ui, sans-serif;
 }
 
+canvas { display:block; }
+
 #auth {
   position: fixed;
   top: 10px;
@@ -14,15 +16,67 @@ html, body {
   z-index: 10000;
   background: rgba(0,0,0,0.6);
   padding: 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  align-items: center;
+  color: #fff;
 }
 
 #auth input, #auth button {
-  padding: 6px;
+  padding: 8px;
   font-size: 14px;
+  border-radius: 8px;
+  border: 0;
+}
+
+#auth button {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+}
+
+#auth button:hover { background: rgba(255,255,255,0.22); cursor:pointer; }
+
+#status { margin: 0; font-size: 12px; opacity: 0.9; flex-basis: 100%; }
+
+.toggle { display:flex; align-items:center; gap:6px; font-size:12px; user-select:none; opacity:0.95; }
+
+#hud{
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+#hotbar{
+  width: min(520px, 92vw);
+  margin: 0 auto 10px auto;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 6px;
+}
+
+.slot{
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.25);
+  background: rgba(0,0,0,0.35);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:#fff;
+  font-size: 11px;
+}
+
+.slot.active{ outline: 2px solid rgba(255,255,255,0.7); }
+
+#hint{
+  width: min(520px, 92vw);
+  margin: 0 auto 14px auto;
+  text-align:center;
+  color: rgba(255,255,255,0.85);
+  font-size: 12px;
 }
 
 /* Invisible mobile touch zones */
