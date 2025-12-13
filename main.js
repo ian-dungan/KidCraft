@@ -1,4 +1,5 @@
 // Imports via ESM CDNs so this works as a static site (e.g. GitHub Pages)
+// Use browser-friendly ESM URLs instead of bare imports
 import * as THREE from 'https://unpkg.com/three@0.175.0/build/three.module.js';
 // import { OrbitControls } from 'https://unpkg.com/three@0.175.0/examples/jsm/controls/OrbitControls.js'; // Not needed
 import { PointerLockControls } from 'https://unpkg.com/three@0.175.0/examples/jsm/controls/PointerLockControls.js';
