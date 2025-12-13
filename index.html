@@ -1,29 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>KidCraft</title>
-
-    <!-- Import map to resolve bare 'three' imports used by Three examples -->
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
-        }
-    }
-    </script>
-
-    <link rel="stylesheet" href="style.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft Clone</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="auth">
-        <input id="username" placeholder="Username" />
-        <input id="password" type="password" placeholder="Password" />
-        <button id="signup">Sign Up</button>
-        <button id="login">Log In</button>
-        <p id="status"></p>
+    <div id="instructions">
+        Click to play!<br>
+        (W, A, S, D = Move, MOUSE = Look)<br>
+        (1-6 = Select Block: Stone, Dirt, Grass, Log, Leaf, Planks)
     </div>
+    <div id="selected-block-ui">Selected: Stone</div>
+    <script type="module" src="main.js?v=6"></script>
 
-    <script type="module" src="main.js?v=5"></script>
+    <!-- Invisible mobile touch zones -->
+    <div id="touch-left" aria-hidden="true"></div>
+    <div id="touch-right" aria-hidden="true"></div>
+
 </body>
-</html>
+</html> 
