@@ -121,7 +121,7 @@ async function upsertPlayerState(initialPosition) {
     const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
     if (!worldId) return;
 
-    const playerObject = controls.object;
+    const playerObject = controls.getObject();
     const pos = initialPosition || playerObject.position;
 
     const { error } = await supabase
@@ -302,7 +302,7 @@ async function syncMyPlayerStateIfNeeded(elapsedTime) {
     const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
     if (!worldId) return;
 
-    const playerObject = controls.object;
+    const playerObject = controls.getObject();
     const pos = playerObject.position;
     const rotY = camera.rotation.y;
 
@@ -630,7 +630,7 @@ function createChunkMesh(chunkX, chunkZ, chunkData) {
 
 // --- Chunk Loading/Unloading Logic ---
 function updateChunks() {
-    const playerPos = controls.object.position;
+    const playerPos = controls.getObject().position;
     const playerChunkX = Math.floor(playerPos.x / CHUNK_SIZE);
     const playerChunkZ = Math.floor(playerPos.z / CHUNK_SIZE);
 
@@ -773,7 +773,7 @@ window.addEventListener('mousedown', (event) => {
             placePosition.floor().addScalar(0.5);
 
             // --- Collision Check: Prevent placing block inside player ---
-            const playerPos = controls.object.position;
+            const playerPos = controls.getObject().position;
             const playerFeetVoxelCenter = playerPos.clone().floor().addScalar(0.5);
             const playerHeadVoxelCenter = playerPos.clone().setY(playerPos.y + 1).floor().addScalar(0.5);
 
@@ -836,7 +836,7 @@ function animate() {
     // --- Player Movement & Physics ---
     if (controls.isLocked) {
         const moveSpeedActual = MOVE_SPEED * delta * 60; // Frame-rate independent speed
-        const playerObject = controls.object;
+        const playerObject = controls.getObject();
 
         // Horizontal movement
         if (keys.w) playerObject.translateZ(-moveSpeedActual);

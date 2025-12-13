@@ -1,35 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
     <title>KidCraft</title>
-    <link rel="stylesheet" href="style.css">
+
+    <!-- Import map to resolve bare 'three' imports used by Three examples -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
+        }
+    }
+    </script>
+
+    <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <!-- Auth overlay -->
-    <div id="auth-overlay">
-        <div id="auth-box">
-            <h2>KidCraft Login</h2>
-            <input id="auth-email" type="email" placeholder="Email" />
-            <input id="auth-password" type="password" placeholder="Password" />
-            <div id="auth-buttons">
-                <button id="auth-sign-in">Sign In</button>
-                <button id="auth-sign-up">Sign Up</button>
-            </div>
-            <p id="auth-status"></p>
-        </div>
+    <div id="auth">
+        <input id="username" placeholder="Username" />
+        <input id="password" type="password" placeholder="Password" />
+        <button id="signup">Sign Up</button>
+        <button id="login">Log In</button>
+        <p id="status"></p>
     </div>
 
-    <!-- Game UI -->
-    <div id="instructions">
-        Click to play!<br>
-        (W, A, S, D = Move, MOUSE = Look)<br>
-        (1-6 = Select Block: Stone, Dirt, Grass, Log, Leaf, Planks)
-    </div>
-    <div id="selected-block-ui">Selected: Stone</div>
-    <div id="fps-display"></div>
-
-    <script type="module" src="main.js?v=7"></script>
+    <script type="module" src="main.js?v=5"></script>
 </body>
 </html>
