@@ -1,29 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>KidCraft</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <title>KidCraft</title>
 
-    <!-- Import map to resolve bare 'three' imports used by Three examples -->
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
-        }
+  <!-- REQUIRED: Import map so Three.js example modules can resolve 'three' -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
     }
-    </script>
+  }
+  </script>
 
-    <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <div id="auth">
-        <input id="username" placeholder="Username" />
-        <input id="password" type="password" placeholder="Password" />
-        <button id="signup">Sign Up</button>
-        <button id="login">Log In</button>
-        <p id="status"></p>
-    </div>
+  <!-- AUTH UI -->
+  <div id="auth">
+    <input id="username" placeholder="Username" autocomplete="username"/>
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password"/>
+    <button id="signup">Sign Up</button>
+    <button id="login">Log In</button>
+    <p id="status"></p>
+  </div>
 
-    <script type="module" src="main.js?v=5"></script>
+  <!-- Invisible mobile touch zones -->
+  <div id="touch-left" aria-hidden="true"></div>
+  <div id="touch-right" aria-hidden="true"></div>
+
+  <script type="module" src="main.js?v=FINAL"></script>
 </body>
 </html>
