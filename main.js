@@ -1,7 +1,344 @@
-import * as THREE from 'three';
-// import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // Not needed
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { createNoise2D } from 'simplex-noise';
+// Imports via ESM CDNs so this works as a static site (e.g. GitHub Pages)
+import * as THREE from 'https://unpkg.com/three@0.175.0/build/three.module.js';
+// import { OrbitControls } from 'https://unpkg.com/three@0.175.0/examples/jsm/controls/OrbitControls.js'; // Not needed
+import { PointerLockControls } from 'https://unpkg.com/three@0.175.0/examples/jsm/controls/PointerLockControls.js';
+import { createNoise2D } from 'https://unpkg.com/simplex-noise@4.0.3/dist/esm/simplex-noise.js';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+
+// --- Supabase / Multiplayer Setup ---
+
+// TODO: Replace with your actual Supabase project values:
+const SUPABASE_URL = 'https://depvgmvmqapfxjwkkhas.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0';
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// We currently target a single world row in the DB
+const WORLD_SLUG = 'overworld';
+let WORLD_ID = null;
+
+// Auth UI elements
+const authOverlay = document.getElementById('auth-overlay');
+const authEmail = document.getElementById('auth-email');
+const authPassword = document.getElementById('auth-password');
+const authSignInBtn = document.getElementById('auth-sign-in');
+const authSignUpBtn = document.getElementById('auth-sign-up');
+const authStatus = document.getElementById('auth-status');
+
+let currentUser = null;
+
+function setAuthStatus(msg) {
+    if (authStatus) authStatus.textContent = msg;
+}
+
+async function refreshUser() {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+        console.error('getUser error', error);
+        return null;
+    }
+    currentUser = data.user || null;
+    return currentUser;
+}
+
+async function handleSignUp() {
+    const email = authEmail?.value.trim();
+    const password = authPassword?.value.trim();
+    if (!email || !password) {
+        setAuthStatus('Email and password required.');
+        return;
+    }
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) {
+        setAuthStatus(error.message);
+        return;
+    }
+    setAuthStatus('Check your email to confirm, then sign in.');
+}
+
+async function handleSignIn() {
+    const email = authEmail?.value.trim();
+    const password = authPassword?.value.trim();
+    if (!email || !password) {
+        setAuthStatus('Email and password required.');
+        return;
+    }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+        setAuthStatus(error.message);
+        return;
+    }
+    currentUser = data.user;
+    setAuthStatus('Logged in.');
+    await onLoggedIn();
+}
+
+authSignUpBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleSignUp();
+});
+
+authSignInBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleSignIn();
+});
+
+// Multiplayer globals (player avatars + realtime)
+let remotePlayers = new Map(); // user_id -> { mesh, lastSeen }
+let realtimeChannel = null;
+let lastStateSync = 0;
+
+const remotePlayerGeometry = new THREE.BoxGeometry(0.6, 1.8, 0.6);
+const remotePlayerMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
+
+async function fetchWorldIdBySlug(slug) {
+    if (WORLD_ID) return WORLD_ID;
+    const { data, error } = await supabase
+        .from('worlds')
+        .select('id')
+        .eq('slug', slug)
+        .single();
+    if (error) {
+        console.error('Failed to load world id', error);
+        return null;
+    }
+    WORLD_ID = data.id;
+    return WORLD_ID;
+}
+
+async function upsertPlayerProfile() {
+    if (!currentUser) return;
+    const username = currentUser.email ? currentUser.email.split('@')[0].slice(0, 16) : 'player';
+    const { error } = await supabase
+        .from('player_profiles')
+        .upsert({ user_id: currentUser.id, username }, { onConflict: 'user_id' });
+    if (error) console.error('upsertPlayerProfile error', error);
+}
+
+async function upsertPlayerState(initialPosition) {
+    if (!currentUser) return;
+    const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
+    if (!worldId) return;
+
+    const playerObject = controls.object;
+    const pos = initialPosition || playerObject.position;
+
+    const { error } = await supabase
+        .from('player_state')
+        .upsert({
+            user_id: currentUser.id,
+            world_id: worldId,
+            pos_x: pos.x,
+            pos_y: pos.y,
+            pos_z: pos.z,
+            rot_y: 0,
+            updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
+
+    if (error) console.error('upsertPlayerState error', error);
+}
+
+function spawnOrUpdateRemotePlayer(userId, stateRow) {
+    if (currentUser && userId === currentUser.id) return; // don't render self
+
+    let entry = remotePlayers.get(userId);
+    if (!entry) {
+        const mesh = new THREE.Mesh(remotePlayerGeometry, remotePlayerMaterial);
+        mesh.position.set(stateRow.pos_x, stateRow.pos_y, stateRow.pos_z);
+        scene.add(mesh);
+        entry = { mesh, lastSeen: Date.now() };
+        remotePlayers.set(userId, entry);
+    } else {
+        entry.mesh.position.set(stateRow.pos_x, stateRow.pos_y, stateRow.pos_z);
+        entry.lastSeen = Date.now();
+    }
+}
+
+function removeRemotePlayer(userId) {
+    const entry = remotePlayers.get(userId);
+    if (entry) {
+        scene.remove(entry.mesh);
+        remotePlayers.delete(userId);
+    }
+}
+
+function applyWorldBlockOverride(row) {
+    // Placeholder: for now we rely on procedural terrain + realtime edits.
+    // You can extend this to fully reconcile DB overrides into your chunk data.
+    console.log('World override from DB (not yet applied to meshes):', row);
+}
+
+function applyBlockUpdate(row) {
+    // Ignore our own events; we've already applied them locally.
+    if (currentUser && row.user_id === currentUser.id) {
+        return;
+    }
+
+    const worldX = row.x;
+    const worldY = row.y;
+    const worldZ = row.z;
+
+    if (row.action === 'place') {
+        const blockType = row.block_type || BLOCK_TYPES.PLANKS;
+        const blockMaterial = Array.isArray(materials[blockType])
+            ? materials[blockType]
+            : materials[blockType].clone();
+
+        const newBlock = new THREE.Mesh(blockGeometry, blockMaterial);
+        newBlock.position.set(worldX + 0.5, worldY + 0.5, worldZ + 0.5);
+        newBlock.userData.blockType = blockType;
+        newBlock.userData.isPlacedBlock = true;
+        scene.add(newBlock);
+        worldObjects.push(newBlock);
+    } else if (row.action === 'break') {
+        // Look for a placed block at this coordinate
+        const target = worldObjects.find(obj =>
+            obj.userData &&
+            obj.userData.isPlacedBlock &&
+            Math.abs(obj.position.x - (worldX + 0.5)) < 0.01 &&
+            Math.abs(obj.position.y - (worldY + 0.5)) < 0.01 &&
+            Math.abs(obj.position.z - (worldZ + 0.5)) < 0.01
+        );
+        if (target) {
+            scene.remove(target);
+            const idx = worldObjects.indexOf(target);
+            if (idx !== -1) worldObjects.splice(idx, 1);
+        }
+    }
+}
+
+async function setupRealtime() {
+    if (!currentUser) return;
+    const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
+    if (!worldId) return;
+
+    if (realtimeChannel) {
+        await supabase.removeChannel(realtimeChannel);
+    }
+
+    realtimeChannel = supabase.channel('grovecraft-realtime')
+        // Player state updates
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'player_state',
+            filter: `world_id=eq.${worldId}`
+        }, payload => {
+            spawnOrUpdateRemotePlayer(payload.new.user_id, payload.new);
+        })
+        .on('postgres_changes', {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'player_state',
+            filter: `world_id=eq.${worldId}`
+        }, payload => {
+            spawnOrUpdateRemotePlayer(payload.new.user_id, payload.new);
+        })
+        // Block updates (placed/broken blocks)
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'block_updates',
+            filter: `world_id=eq.${worldId}`
+        }, payload => {
+            applyBlockUpdate(payload.new);
+        })
+        .subscribe((status) => {
+            console.log('Realtime status', status);
+        });
+
+    // Initial load: other players in this world
+    const { data: states, error } = await supabase
+        .from('player_state')
+        .select('*')
+        .eq('world_id', worldId);
+    if (!error && states) {
+        for (const row of states) {
+            spawnOrUpdateRemotePlayer(row.user_id, row);
+        }
+    }
+
+    // Initial load: world overrides
+    const { data: overrides, error: ovErr } = await supabase
+        .from('world_blocks')
+        .select('*')
+        .eq('world_id', worldId);
+    if (!ovErr && overrides) {
+        for (const row of overrides) {
+            applyWorldBlockOverride(row);
+        }
+    }
+}
+
+async function recordBlockUpdate(x, y, z, action, blockType) {
+    if (!currentUser) return;
+    const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
+    if (!worldId) return;
+
+    const payload = {
+        world_id: worldId,
+        user_id: currentUser.id,
+        x,
+        y,
+        z,
+        action,
+        block_type: blockType || null
+    };
+
+    const { error } = await supabase
+        .from('block_updates')
+        .insert(payload);
+
+    if (error) console.error('recordBlockUpdate error', error);
+}
+
+async function syncMyPlayerStateIfNeeded(elapsedTime) {
+    if (!currentUser) return;
+    const now = elapsedTime;
+    if (now - lastStateSync < 0.2) return; // ~5 times per second
+    lastStateSync = now;
+
+    const worldId = await fetchWorldIdBySlug(WORLD_SLUG);
+    if (!worldId) return;
+
+    const playerObject = controls.object;
+    const pos = playerObject.position;
+    const rotY = camera.rotation.y;
+
+    const { error } = await supabase
+        .from('player_state')
+        .upsert({
+            user_id: currentUser.id,
+            world_id: worldId,
+            pos_x: pos.x,
+            pos_y: pos.y,
+            pos_z: pos.z,
+            rot_y: rotY,
+            updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
+
+    if (error) console.error('syncMyPlayerStateIfNeeded error', error);
+}
+
+async function onLoggedIn() {
+    await refreshUser();
+    if (!currentUser) return;
+
+    if (authOverlay) authOverlay.style.display = 'none';
+
+    await fetchWorldIdBySlug(WORLD_SLUG);
+    await upsertPlayerProfile();
+    await upsertPlayerState();
+    await setupRealtime();
+}
+
+// Check for existing session when the module loads
+refreshUser().then(user => {
+    if (user) {
+        onLoggedIn();
+    }
+});
 
 // --- Constants ---
 const CHUNK_SIZE = 16; // Size of a chunk (blocks wide/deep)
@@ -128,128 +465,6 @@ function getChunkKey(cx, cz) {
 
 // --- Player State & Input ---
 const keys = { w: false, a: false, s: false, d: false, space: false };
-// ------------------------------
-// Mobile touch controls (invisible zones)
-// Left bottom: move  (virtual stick)
-// Right bottom: look (drag to rotate)
-// ------------------------------
-const touchState = {
-    move: { id: null, startX: 0, startY: 0, x: 0, y: 0, active: false },
-    look: { id: null, lastX: 0, lastY: 0, active: false }
-};
-
-let touchMoveForward = 0; // [-1..1]
-let touchMoveStrafe  = 0; // [-1..1]
-
-function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
-
-function setupTouchZones() {
-    const left = document.getElementById('touch-left');
-    const right = document.getElementById('touch-right');
-    if (!left || !right) return;
-
-    const DEADZONE = 10;     // px
-    const MAX_DIST = 70;     // px (full tilt)
-    const LOOK_SENS = 0.003; // radians per px
-
-    // MOVE ZONE
-    left.addEventListener('touchstart', (e) => {
-        if (!e.changedTouches || e.changedTouches.length === 0) return;
-        const t = e.changedTouches[0];
-        touchState.move.id = t.identifier;
-        touchState.move.startX = t.clientX;
-        touchState.move.startY = t.clientY;
-        touchState.move.x = t.clientX;
-        touchState.move.y = t.clientY;
-        touchState.move.active = true;
-    }, { passive: false });
-
-    left.addEventListener('touchmove', (e) => {
-        if (!touchState.move.active) return;
-        for (const t of e.changedTouches) {
-            if (t.identifier !== touchState.move.id) continue;
-            touchState.move.x = t.clientX;
-            touchState.move.y = t.clientY;
-
-            const dx = t.clientX - touchState.move.startX;
-            const dy = t.clientY - touchState.move.startY;
-
-            const adx = Math.abs(dx), ady = Math.abs(dy);
-            let nx = 0, ny = 0;
-            if (adx > DEADZONE) nx = dx / MAX_DIST;
-            if (ady > DEADZONE) ny = dy / MAX_DIST;
-
-            touchMoveStrafe  = clamp(nx, -1, 1);
-            touchMoveForward = clamp(-ny, -1, 1); // up = forward
-            e.preventDefault();
-            break;
-        }
-    }, { passive: false });
-
-    function endMove(e){
-        for (const t of e.changedTouches || []) {
-            if (t.identifier !== touchState.move.id) continue;
-            touchState.move.active = false;
-            touchState.move.id = null;
-            touchMoveForward = 0;
-            touchMoveStrafe = 0;
-            break;
-        }
-    }
-    left.addEventListener('touchend', endMove, { passive: false });
-    left.addEventListener('touchcancel', endMove, { passive: false });
-
-    // LOOK ZONE
-    right.addEventListener('touchstart', (e) => {
-        if (!e.changedTouches || e.changedTouches.length === 0) return;
-        const t = e.changedTouches[0];
-        touchState.look.id = t.identifier;
-        touchState.look.lastX = t.clientX;
-        touchState.look.lastY = t.clientY;
-        touchState.look.active = true;
-    }, { passive: false });
-
-    right.addEventListener('touchmove', (e) => {
-        if (!touchState.look.active) return;
-
-        const yawObject = controls.getObject();
-        const pitchObject = yawObject && yawObject.children ? yawObject.children[0] : null;
-
-        for (const t of e.changedTouches) {
-            if (t.identifier !== touchState.look.id) continue;
-
-            const dx = t.clientX - touchState.look.lastX;
-            const dy = t.clientY - touchState.look.lastY;
-            touchState.look.lastX = t.clientX;
-            touchState.look.lastY = t.clientY;
-
-            if (yawObject) yawObject.rotation.y -= dx * LOOK_SENS;
-            if (pitchObject) {
-                pitchObject.rotation.x -= dy * LOOK_SENS;
-                pitchObject.rotation.x = clamp(pitchObject.rotation.x, -Math.PI/2, Math.PI/2);
-            }
-
-            e.preventDefault();
-            break;
-        }
-    }, { passive: false });
-
-    function endLook(e){
-        for (const t of e.changedTouches || []) {
-            if (t.identifier !== touchState.look.id) continue;
-            touchState.look.active = false;
-            touchState.look.id = null;
-            break;
-        }
-    }
-    right.addEventListener('touchend', endLook, { passive: false });
-    right.addEventListener('touchcancel', endLook, { passive: false });
-}
-
-window.addEventListener('load', () => {
-    try { setupTouchZones(); } catch (e) { console.warn('[Touch] setup failed', e); }
-});
-
 let playerVelocityY = 0;
 let onGround = false;
 let selectedBlockType = BLOCK_TYPES.PLANKS; // Start with planks
@@ -415,7 +630,7 @@ function createChunkMesh(chunkX, chunkZ, chunkData) {
 
 // --- Chunk Loading/Unloading Logic ---
 function updateChunks() {
-    const playerPos = controls.getObject().position;
+    const playerPos = controls.object.position;
     const playerChunkX = Math.floor(playerPos.x / CHUNK_SIZE);
     const playerChunkZ = Math.floor(playerPos.z / CHUNK_SIZE);
 
@@ -512,13 +727,22 @@ window.addEventListener('mousedown', (event) => {
             }
             else if (!obj.userData.isChunkMesh && obj.userData.isPlacedBlock) {
                  // It's a manually placed block (individual Mesh)
+                 const blockPos = obj.position;
+                 const blockX = Math.floor(blockPos.x);
+                 const blockY = Math.floor(blockPos.y);
+                 const blockZ = Math.floor(blockPos.z);
+
                  scene.remove(obj);
                  const index = worldObjects.indexOf(obj);
-                 if(index > -1) worldObjects.splice(index, 1);
+                 if (index > -1) worldObjects.splice(index, 1);
+
+                 // Notify backend so other players can remove this block
+                 recordBlockUpdate(blockX, blockY, blockZ, 'break', obj.userData.blockType || null);
+
                  // Optional: Dispose geometry/material if not shared
                  // obj.geometry.dispose();
                  // obj.material.dispose();
-                 console.log("Removed placed block");
+                 console.log("Removed placed block at", blockX, blockY, blockZ);
             }
         }
         // --- Placing Blocks ---
@@ -549,7 +773,7 @@ window.addEventListener('mousedown', (event) => {
             placePosition.floor().addScalar(0.5);
 
             // --- Collision Check: Prevent placing block inside player ---
-            const playerPos = controls.getObject().position;
+            const playerPos = controls.object.position;
             const playerFeetVoxelCenter = playerPos.clone().floor().addScalar(0.5);
             const playerHeadVoxelCenter = playerPos.clone().setY(playerPos.y + 1).floor().addScalar(0.5);
 
@@ -571,10 +795,19 @@ window.addEventListener('mousedown', (event) => {
             newBlock.userData.isPlacedBlock = true; // Mark as manually placed
             scene.add(newBlock);
             worldObjects.push(newBlock); // Add to raycast targets
+
+            // Notify backend so other players can place this block
+            const blockX = Math.floor(placePosition.x);
+            const blockY = Math.floor(placePosition.y);
+            const blockZ = Math.floor(placePosition.z);
+            recordBlockUpdate(blockX, blockY, blockZ, 'place', selectedBlockType);
+
             console.log(`Placed ${selectedBlockType} block at ${placePosition.x}, ${placePosition.y}, ${placePosition.z}`);
         }
     }
 });
+
+
 
 
 // --- Animation Loop ---
@@ -592,7 +825,7 @@ function animate() {
     frameCount++;
     if (elapsedTime - fpsLastUpdateTime >= 1.0) {
         const fps = Math.round(frameCount / (elapsedTime - fpsLastUpdateTime));
-        if(fpsDisplayElement) fpsDisplayElement.textContent = `FPS: ${fps}`;
+        if (fpsDisplayElement) fpsDisplayElement.textContent = `FPS: ${fps}`;
         frameCount = 0;
         fpsLastUpdateTime = elapsedTime;
     }
@@ -603,18 +836,13 @@ function animate() {
     // --- Player Movement & Physics ---
     if (controls.isLocked) {
         const moveSpeedActual = MOVE_SPEED * delta * 60; // Frame-rate independent speed
-        const playerObject = controls.getObject();
+        const playerObject = controls.object;
 
-        // Horizontal movement (keyboard + touch analog)
-        let forwardInput = (keys.w ? 1 : 0) + (keys.s ? -1 : 0) + touchMoveForward;
-        let strafeInput  = (keys.d ? 1 : 0) + (keys.a ? -1 : 0) + touchMoveStrafe;
-
-        // Normalize diagonal input so speed stays consistent
-        const len = Math.hypot(forwardInput, strafeInput);
-        if (len > 1) { forwardInput /= len; strafeInput /= len; }
-
-        if (forwardInput !== 0) playerObject.translateZ(-moveSpeedActual * forwardInput);
-        if (strafeInput !== 0)  playerObject.translateX(moveSpeedActual * strafeInput);
+        // Horizontal movement
+        if (keys.w) playerObject.translateZ(-moveSpeedActual);
+        if (keys.s) playerObject.translateZ(moveSpeedActual);
+        if (keys.a) playerObject.translateX(-moveSpeedActual);
+        if (keys.d) playerObject.translateX(moveSpeedActual);
 
         // Vertical movement (Gravity)
         const playerPosition = playerObject.position;
@@ -622,32 +850,39 @@ function animate() {
         // Apply gravity
         playerVelocityY -= GRAVITY * delta * 60;
 
-        // Check for ground collision
-        groundCheckRaycaster.set(playerPosition, downVector);
-        const groundIntersects = groundCheckRaycaster.intersectObjects(worldObjects, true); // Check all world objects
-        const onSolidGround = groundIntersects.length > 0 && groundIntersects[0].distance <= PLAYER_HEIGHT + 0.01; // Small buffer
-
-        if (onSolidGround) {
-            // Snap to ground if falling onto it
-            if (playerVelocityY <= 0) {
-                 playerVelocityY = 0;
-                 // Adjust position precisely to avoid sinking/floating slightly
-                 playerPosition.y = groundIntersects[0].point.y + PLAYER_HEIGHT;
-                 onGround = true;
-            }
-        } else {
-             onGround = false; // Not on ground if raycast doesn't hit or hit is too far
-        }
-
         // Apply vertical velocity
         playerPosition.y += playerVelocityY * delta * 60;
 
+        // Ground collision check
+        groundCheckRaycaster.set(playerPosition, downVector);
+        const groundIntersects = groundCheckRaycaster.intersectObjects(worldObjects, true); // Check all world objects
+
+        if (groundIntersects.length > 0) {
+            const dist = groundIntersects[0].distance;
+            if (dist <= PLAYER_HEIGHT + 0.1 && playerVelocityY <= 0) {
+                // Snap to ground if falling onto it
+                playerPosition.y = groundIntersects[0].point.y + PLAYER_HEIGHT;
+                playerVelocityY = 0;
+                onGround = true;
+            } else if (dist > PLAYER_HEIGHT + 0.1) {
+                onGround = false;
+            }
+        } else {
+            onGround = false;
+        }
+
         // Prevent falling through world (safety net)
-        if (playerPosition.y < baseLevel - stoneDepth * 3) {
-            playerPosition.set(currentChunkX * CHUNK_SIZE + CHUNK_SIZE/2, baseLevel + noiseAmplitude + 5, currentChunkZ * CHUNK_SIZE + CHUNK_SIZE/2);
+        const minY = baseLevel - stoneDepth * 3;
+        if (playerPosition.y < minY) {
+            const safeX = currentChunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
+            const safeZ = currentChunkZ * CHUNK_SIZE + CHUNK_SIZE / 2;
+            playerPosition.set(safeX, baseLevel + noiseAmplitude + 5, safeZ);
             playerVelocityY = 0;
         }
     }
+
+    // --- Multiplayer sync ---
+    syncMyPlayerStateIfNeeded(elapsedTime);
 
     // --- Render ---
     renderer.render(scene, camera);
@@ -655,11 +890,6 @@ function animate() {
 
 // --- Initial Setup ---
 updateSelectedBlockUI();
-// Initial chunk load around starting position (optional, updateChunks will handle it)
-// const startChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-// const startChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
-// currentChunkX = startChunkX + 1; // Force initial load
-// currentChunkZ = startChunkZ + 1;
 updateChunks(); // Perform initial chunk load based on camera start
 
 console.log("Starting animation loop...");
