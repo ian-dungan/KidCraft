@@ -20,7 +20,7 @@ let WORLD_ID = null;
 
 // Auth UI elements
 const authOverlay = document.getElementById('auth-overlay');
-const authEmail = document.getElementById('auth-email');
+const authUsername = document.getElementById('auth-username');
 const authPassword = document.getElementById('auth-password');
 const authSignInBtn = document.getElementById('auth-sign-in');
 const authSignUpBtn = document.getElementById('auth-sign-up');
@@ -42,11 +42,28 @@ async function refreshUser() {
     return currentUser;
 }
 
+function normalizeUsername(u) {
+  return (u || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_\.\-]/g, '');
+}
+
+function usernameToEmail(username) {
+  const u = normalizeUsername(username);
+  // Synthetic email to satisfy Supabase email/password auth.
+  // To make this feel username-only, disable email confirmations in Supabase Auth settings.
+  return `${u}@kidcraft.local`;
+}
+
+
+
 async function handleSignUp() {
-    const email = authEmail?.value.trim();
+    const email = authUsername?.value.trim();
     const password = authPassword?.value.trim();
-    if (!email || !password) {
-        setAuthStatus('Email and password required.');
+    if (!username || !password) {
+        setAuthStatus('Username and password required.');
         return;
     }
     const { error } = await supabase.auth.signUp({ email, password });
@@ -54,14 +71,14 @@ async function handleSignUp() {
         setAuthStatus(error.message);
         return;
     }
-    setAuthStatus('Check your email to confirm, then sign in.');
+    setAuthStatus('Account created. You can sign in now. If email confirmations are enabled in Supabase, disable them for username-only, then sign in.');
 }
 
 async function handleSignIn() {
-    const email = authEmail?.value.trim();
+    const email = authUsername?.value.trim();
     const password = authPassword?.value.trim();
-    if (!email || !password) {
-        setAuthStatus('Email and password required.');
+    if (!username || !password) {
+        setAuthStatus('Username and password required.');
         return;
     }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });

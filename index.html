@@ -4,13 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KidCraft</title>
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
-            }
-        }
-    </script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,7 +11,7 @@
     <div id="auth-overlay">
         <div id="auth-box">
             <h2>KidCraft Login</h2>
-            <input id="auth-email" type="email" placeholder="Email" />
+            <input id="auth-username" type="text" placeholder="Username" />
             <input id="auth-password" type="password" placeholder="Password" />
             <div id="auth-buttons">
                 <button id="auth-sign-in">Sign In</button>
@@ -37,6 +30,6 @@
     <div id="selected-block-ui">Selected: Stone</div>
     <div id="fps-display"></div>
 
-    <script type="module" src="main.js"></script>
+    <script type="module" src="main.js?v=4"></script>
 </body>
 </html>
