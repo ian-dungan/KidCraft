@@ -185,6 +185,8 @@ const chunkMeshes = new Map(); // chunkKey -> THREE.Group
 
 // Material palette (minimal starter; extend to your full materials table later)
 const BLOCKS = [
+  { code:'crafting_table', name:'Crafting Table', color:0x8b5a2b },
+  { code:'furnace', name:'Furnace', color:0x555555 },
   { code: "grass_block", name: "Grass", color: 0x2a8f3a },
   { code: "dirt", name: "Dirt", color: 0x7a4f2a },
   { code: "stone", name: "Stone", color: 0x7a7a7a },
@@ -646,6 +648,7 @@ function bumpShake(amount=0.12){
   // used by movement + block actions
   shake = Math.min(0.25, (shake || 0) + amount);
 }
+}
 
 // =======================
 // HOTBAR / INVENTORY (minimal)
@@ -667,6 +670,44 @@ function swingHotbar(){
 // === SURVIVAL INVENTORY + CRAFTING (Minecraft-ish) ===
 let INV = {}; // code -> count
 let invOpen = false;
+
+
+// Supabase inventory persistence (per user)
+let invDirty = false;
+let invSaveTimer = null;
+
+async function loadInventoryFromDB(){
+  if (!supabase) return;
+  const u = (await supabase.auth.getUser()).data?.user;
+  if (!u) return;
+  try{
+    const { data } = await supabase.from("kidcraft_player_inventory").select("items").eq("user_id", u.id).maybeSingle();
+    if (data && data.items){
+      inv = data.items;
+      invDirty = false;
+      renderInventory();
+  scheduleInventorySave();
+      renderHotbar();
+    } else {
+      await supabase.from("kidcraft_player_inventory").upsert({ user_id: u.id, items: inv }, { onConflict:"user_id" });
+    }
+  }catch(e){}
+}
+
+function scheduleInventorySave(){
+  invDirty = true;
+  if (invSaveTimer) return;
+  invSaveTimer = setTimeout(saveInventoryToDB, 600);
+}
+
+async function saveInventoryToDB(){
+  invSaveTimer = null;
+  if (!invDirty || !supabase) return;
+  const u = (await supabase.auth.getUser()).data?.user;
+  if (!u) return;
+  invDirty = false;
+  try{ await supabase.from("kidcraft_player_inventory").upsert({ user_id: u.id, items: inv }, { onConflict:"user_id" }); }catch(e){}
+}
 
 function invStorageKey(){
   const u = (typeof loadPreferredUsername === "function" ? loadPreferredUsername() : null) || localStorage.getItem("kidcraft_username") || "guest";
@@ -749,7 +790,10 @@ function bestToolCode(toolType){
 }
 
 // Crafting recipes (close to Minecraft, simplified; no fuel)
-const RECIPES = [
+
+    let RECIPES = [];
+    let SMELT_RECIPES = [];
+    const FALLBACK_RECIPES = [
   { name:"Oak Planks (x4)", out:["oak_planks",4], in:[["oak_log",1]] },
   { name:"Sticks (x4)", out:["stick",4], in:[["oak_planks",2]] },
   { name:"Crafting Table", out:["crafting_table",1], in:[["oak_planks",4]] },
@@ -775,6 +819,40 @@ const RECIPES = [
   { name:"Diamond Shovel",  out:["diamond_shovel",1],  in:[["diamond",1],["stick",2]] },
   { name:"Diamond Axe",     out:["diamond_axe",1],     in:[["diamond",3],["stick",2]] },
 ];
+
+    async function loadRecipesFromDB(){
+      if (!supabase) { RECIPES = FALLBACK_RECIPES; return; }
+      try{
+        const { data: rdata, error: re } = await supabase.from("kidcraft_recipes")
+          .select("id,name,station,output_code,output_qty,enabled")
+          .eq("enabled", true);
+        if (re) throw re;
+        const { data: idata, error: ie } = await supabase.from("kidcraft_recipe_ingredients")
+          .select("recipe_id,input_code,qty");
+        if (ie) throw ie;
+        const byId = new Map();
+        for (const r of (rdata||[])) byId.set(r.id, { name:r.name, station:r.station, out:[r.output_code,r.output_qty], in:[] });
+        for (const ing of (idata||[])) {
+          const rr = byId.get(ing.recipe_id);
+          if (rr) rr.in.push([ing.input_code, ing.qty]);
+        }
+        RECIPES = Array.from(byId.values());
+      } catch(e) {
+        RECIPES = FALLBACK_RECIPES;
+      }
+
+      try{
+        const { data } = await supabase.from("kidcraft_smelting_recipes")
+          .select("name,input_code,output_code,output_qty,cook_time_ms,enabled")
+          .eq("enabled", true);
+        SMELT_RECIPES = (data||[]).map(r=>({ name:r.name, in:[[r.input_code,1]], out:[r.output_code,r.output_qty], cook_time_ms:r.cook_time_ms }));
+      } catch(e) {
+        SMELT_RECIPES = [];
+      }
+      renderInventory();
+  scheduleInventorySave();
+    }
+
 
 function ensureInventoryPanel(){
   if (document.getElementById("invPanel")) return;
@@ -1051,6 +1129,18 @@ window.addEventListener("deviceorientation", (e)=>{
 // =======================
 // PLAYER
 // =======================
+
+// =======================
+// Hunger (light Minecraft-ish)
+let hunger = 20; // 0..20
+let hungerAccum = 0;
+function setHunger(v){
+  hunger = Math.max(0, Math.min(20, v));
+  const el = document.getElementById("hudHunger");
+  if (el) el.style.width = `${(hunger/20)*100}%`;
+}
+function drainHunger(a){ if (a>0) setHunger(hunger - a); }
+
 const player = {
   velocityY: 0,
   grounded: false,
@@ -1180,6 +1270,9 @@ function getStoneFill(x,y,z){
 }
 
 function getBlockCode(x,y,z){
+  const edited = getBlockEdit(x,y,z);
+  if (edited !== null) return edited;
+
     if (y <= MIN_Y) return \"stone\";
 // server/client edits override
   const [cx, cz] = worldToChunk(x,z);
@@ -2145,6 +2238,34 @@ function maybePlayFootsteps(){
   playSfx(stepSfxNameFor(code), 0.08);
 }
 
+
+function isFallingBlock(code){ return code === "sand" || code === "gravel"; }
+let fallTickAccum = 0;
+function updateFallingBlocks(dt){
+  fallTickAccum += dt;
+  if (fallTickAccum < 0.15) return;
+  fallTickAccum = 0;
+  const px = Math.floor(controls.object.position.x);
+  const pz = Math.floor(controls.object.position.z);
+  const r = 8;
+  for (let x=px-r; x<=px+r; x++){
+    for (let z=pz-r; z<=pz+r; z++){
+      const top = Math.min(MAX_Y-1, Math.floor(controls.object.position.y) + 12);
+      const bot = Math.max(MIN_Y+2, top - 40);
+      for (let y=top; y>=bot; y--){
+        const c = getBlockCode(x,y,z);
+        if (!isFallingBlock(c)) continue;
+        if (getBlockCode(x,y-1,z) === "air"){
+          setBlockEdit(x,y,z,"air");
+          setBlockEdit(x,y-1,z,c);
+          rebuildChunkAt(x,z);
+          break;
+        }
+      }
+    }
+  }
+}
+
 function animate(){
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -2293,6 +2414,8 @@ function animate(){
 
   // Head bob + FOV sprint kick
   const speed = Math.hypot(player.vx, player.vz);
+  if (sprint && player.grounded && speed>1.2){ hungerAccum += dt; if (hungerAccum>1.0){ drainHunger(1); hungerAccum=0; } }
+
   const bobAmt = player.grounded ? Math.min(1, speed / 6) : 0;
   const bob = Math.sin(now * 0.018) * 0.06 * bobAmt;
   // camera is the control object here; apply bob as a small additive offset
