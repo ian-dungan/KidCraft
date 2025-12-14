@@ -11,8 +11,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "YOUR_SUPABASE_URL";
-const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
+const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
