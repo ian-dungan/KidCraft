@@ -974,7 +974,7 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     subscribeRealtime();
     setHint((isGuest ? "Guest is read-only. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
-      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place";
+      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"
 
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
