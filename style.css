@@ -211,3 +211,9 @@ canvas { display:block; }
   background: rgba(255,255,255,0.10); color:#fff; padding: 6px 10px;
 }
 .recipe button:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
+
+
+/* Desktop-only: hide mobile touch zones entirely so they can't intercept clicks */
+@media (pointer: fine) {
+  #touch-left, #touch-right { display: none; }
+}

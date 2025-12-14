@@ -11,9 +11,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
-const WORLD_SLUG = "overworld"; // matches SQL seed
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
+// NOTE: world slug is selected in UI (world-select) and persisted in localStorage.
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
 const ENABLE_GUEST_BUTTON = true;
@@ -81,7 +81,7 @@ function normalizeUsername(u){
 }
 function usernameToEmail(u) {
   const n = normalizeUsername(u);
-  return `${n}@kidcraft.local`;
+  return `${n}@kidcraft.game`;
 }
 
 const ui = {
@@ -98,6 +98,9 @@ const ui = {
 
 ui.guest.style.display = ENABLE_GUEST_BUTTON ? "" : "none";
 
+// Hide gyro toggle on desktop
+try { if (!isMobile() && ui.gyro?.closest('.toggle')) ui.gyro.closest('.toggle').style.display = 'none'; } catch {}
+
 function setStatus(msg){ ui.status.textContent = msg; }
 function setHint(msg){ ui.hint.textContent = msg; }
 
@@ -108,6 +111,7 @@ ui.signup.onclick = async () => {
   if (u.length < 3) return setStatus("Username must be 3+ chars (letters/numbers/_).");
   if (p.length < 6) return setStatus("Password must be at least 6 characters.");
   savePreferredUsername(u);
+  getSelectedWorldSlug();
   if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Signed up. Now log in.");
@@ -120,12 +124,14 @@ ui.login.onclick = async () => {
   if (u.length < 3) return setStatus("Enter a valid username.");
   if (!p) return setStatus("Enter password.");
   savePreferredUsername(u);
+  getSelectedWorldSlug();
   if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Logged in.");
 };
 
 ui.guest.onclick = async () => {
+  getSelectedWorldSlug();
   // Requires: Supabase Auth -> Anonymous sign-ins enabled
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
@@ -206,7 +212,7 @@ function renderHotbar(){
   for (let i=0;i<9;i++){
     const slot = document.createElement("div");
     slot.className = "slot" + (i===hotbarIndex ? " active":"");
-    const b = BLOCKS[i % BLOCKS.length];
+    const b = BLOCKS[i]; // no wrap => no duplicates
     slot.textContent = b ? b.name : "";
     ui.hotbar.appendChild(slot);
   }
@@ -514,17 +520,14 @@ function applyEditLocal(world_id, x,y,z, code){
 async function placeBlockServer(world_id, x,y,z, code){
   // Writes to world_blocks (authoritative) + logs block_updates
   await supabase.from("world_blocks").upsert({ world_id, x, y, z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: currentUserId(), x,y,z, action:"place", block_type: code });
+  await supabase.from("block_updates").insert({ world_id, user_id: userId(), x,y,z, action:"place", block_type: code });
 }
 
 async function breakBlockServer(world_id, x,y,z){
   await supabase.from("world_blocks").upsert({ world_id, x,y,z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: currentUserId(), x,y,z, action:"break", block_type: "air" });
+  await supabase.from("block_updates").insert({ world_id, user_id: userId(), x,y,z, action:"break", block_type: "air" });
 }
 
-function currentUserId(){
-  return (supabase.auth.getUser && supabase.auth.getUser()) ? null : null;
-}
 
 // We'll store user id from session
 let sessionUserId = null;
@@ -706,7 +709,7 @@ function inSpawnProtection(x, z){
 let lastStatePush = 0;
 
 async function ensureWorld(){
-  const { data, error } = await supabase.from("worlds").select("id,slug").eq("slug", WORLD_SLUG).maybeSingle();
+  const { data, error } = await supabase.from("worlds").select("id,slug").eq("slug", (getSelectedWorldSlug ? getSelectedWorldSlug() : (worldSlug || "overworld"))).maybeSingle();
   if (error) { console.warn(error); return null; }
   worldId = data?.id || null;
   return worldId;
@@ -867,7 +870,7 @@ function subscribeRealtime(){
   // Player state updates
   const ch1 = supabase.channel(`kidcraft_state_${worldId}`)
     .on("postgres_changes",
-      { event: "UPDATE", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
+      { event: "*", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
       (payload)=>{
         const row = payload.new || payload.old;
         if (!row) return;
@@ -987,6 +990,13 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
 
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
+    // Show chat + load recent history
+    if (chat.root) chat.root.style.display = "";
+    await loadRecentChat();
+
+    // Load crafting recipes + mobs (non-blocking)
+    loadRecipes().catch(()=>{});
+    loadMobs().catch(()=>{});
   } else {
     clearRealtime();
     document.getElementById("auth").style.display = "";
