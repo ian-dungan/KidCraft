@@ -1165,6 +1165,7 @@ declare
   inv_id uuid;
   out_code text;
   out_qty int;
+  v_recipe_code text := recipe_code;
   need record;
   have_qty int;
   out_mat_id int;
@@ -1200,7 +1201,7 @@ begin
 
   -- Check ingredients
   for need in
-    select ri.material_code, ri.qty from public.recipe_ingredients ri where ri.recipe_code = recipe_code
+    select material_code, qty from public.recipe_ingredients ri where ri.recipe_code = v_recipe_code
   loop
     select coalesce(sum(s.quantity),0) into have_qty
     from public.inventory_slots s
@@ -1214,7 +1215,7 @@ begin
 
   -- Consume ingredients across slots
   for need in
-    select ri.material_code, ri.qty from public.recipe_ingredients ri where ri.recipe_code = recipe_code
+    select material_code, qty from public.recipe_ingredients ri where ri.recipe_code = v_recipe_code
   loop
     have_qty := need.qty * craft_qty;
 
