@@ -241,3 +241,15 @@ canvas { display:block; }
 .chat-line{
   transition: opacity 200ms ease;
 }
+
+
+/* Minecraft-ish hand/slot swing feedback */
+@keyframes handSwing {
+  0%   { transform: translateY(0) rotate(0deg) scale(1.0); }
+  35%  { transform: translateY(2px) rotate(-2deg) scale(0.98); }
+  70%  { transform: translateY(-2px) rotate(2deg) scale(1.02); }
+  100% { transform: translateY(0) rotate(0deg) scale(1.0); }
+}
+#hotbar.swing .slot.active{
+  animation: handSwing 140ms ease-out;
+}

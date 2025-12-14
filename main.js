@@ -330,7 +330,26 @@ let breaking = false;
 let breakHoldStart = 0;
 let crackOverlay = null;
 let crackMat = null;
-const BREAK_TIME_MS = 520;      // time to fully break a block when holding click
+const BREAK_TIME_MS_BASE = 520;      // base time (ms) for dirt-ish blocks
+let breakTimeMs = BREAK_TIME_MS_BASE;
+
+function breakTimeFor(code){
+  const c = String(code||"");
+  // Use DB hardness if available
+  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
+  const h = def?.hardness;
+  if (typeof h === 'number' && isFinite(h)){
+    // hardness ~ 0..10+ : scale into 240..1400ms
+    return Math.max(220, Math.min(1600, 240 + h*120));
+  }
+  const lc = c.toLowerCase();
+  if (c === 'grass_block' || c === 'dirt' || lc.includes('leaves')) return 380;
+  if (c === 'sand' || c === 'gravel') return 430;
+  if (lc.includes('log') || lc.includes('plank') || lc.includes('wood')) return 620;
+  if (lc.includes('ore')) return 950;
+  if (c === 'stone' || c === 'cobblestone') return 900;
+  return BREAK_TIME_MS_BASE;
+}
 
 function tex_crack(stage){
   // stage 0..9
@@ -501,6 +520,26 @@ function playSfx(kind){
   if (kind === "step")  return tone(160 + Math.random()*40, 0.03, "triangle", 0.03);
 }
 
+
+let lastStepTime = 0;
+function surfaceCodeUnderPlayer(){
+  const px = Math.floor(controls.object.position.x);
+  const pz = Math.floor(controls.object.position.z);
+  const py = Math.floor(controls.object.position.y - 1.1);
+  return getBlockCode(px, py, pz);
+}
+function stepSfxNameFor(code){
+  const c = String(code||"");
+  const lc = c.toLowerCase();
+  if (c === "grass_block" || lc.includes("grass")) return "step_grass";
+  if (c === "dirt") return "step_dirt";
+  if (c === "sand") return "step_sand";
+  if (c === "gravel") return "step_gravel";
+  if (lc.includes("wood") || lc.includes("plank") || lc.includes("log")) return "step_wood";
+  if (lc.includes("stone") || lc.includes("cobble") || lc.includes("ore")) return "step_stone";
+  return "step_generic";
+}
+
 function bumpShake(amount=0.12){
   // used by movement + block actions
   shake = Math.min(0.25, (shake || 0) + amount);
@@ -511,6 +550,17 @@ function bumpShake(amount=0.12){
 // HOTBAR / INVENTORY (minimal)
 // =======================
 let hotbarIndex = 0;
+
+function swingHotbar(){
+  const el = document.getElementById("hotbar");
+  if (!el) return;
+  el.classList.remove("swing");
+  // force reflow
+  void el.offsetWidth;
+  el.classList.add("swing");
+  setTimeout(()=> el.classList.remove("swing"), 180);
+}
+
 function renderHotbar(){
   ui.hotbar.innerHTML = "";
   // Show unique blocks (no forced repeats). Extra slots stay empty until you add more BLOCKS.
@@ -1219,6 +1269,7 @@ window.addEventListener("mousedown", async (e)=>{
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     bumpShake(0.08);
+    swingHotbar();
     playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   }
@@ -1243,6 +1294,7 @@ window.addEventListener("touchend", async (e)=>{
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     bumpShake(0.08);
+    swingHotbar();
     playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   } else {
@@ -1737,6 +1789,26 @@ addEventListener("keydown", (e)=>{
 
 function lerp(a,b,t){ return a + (b-a)*t; }
 
+
+function maybePlayFootsteps(){
+  // Only when moving on ground
+  const now = performance.now();
+  const pos = controls.object.position;
+  const groundY = groundHeightAt(pos.x, pos.z);
+  const onGround = Math.abs(pos.y - groundY) < 0.25;
+  // Estimate horizontal motion by using velocity if present, else use keys state
+  const vx = (window.__velX ?? 0);
+  const vz = (window.__velZ ?? 0);
+  const speed = Math.hypot(vx, vz);
+  if (!onGround || speed < 0.6) return;
+  const sprinting = !!keys["ShiftLeft"] || !!keys["ShiftRight"];
+  const interval = sprinting ? 240 : 320;
+  if (now - lastStepTime < interval) return;
+  lastStepTime = now;
+  const code = surfaceCodeUnderPlayer();
+  playSfx(stepSfxNameFor(code), 0.08);
+}
+
 function animate(){
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -1744,6 +1816,7 @@ function animate(){
 
   // Update block particles
   updateParticles(dt);
+  maybePlayFootsteps();
 
   // Update breaking progress (hold-to-break)
   if (breaking && breakTargetKey && crackOverlay && crackOverlay.visible){
@@ -1752,7 +1825,7 @@ function animate(){
     const by = Math.floor(crackOverlay.position.y - 0.5);
     const bz = Math.floor(crackOverlay.position.z - 0.5);
 
-    breakProgress = Math.min(1, breakProgress + (dt*1000) / BREAK_TIME_MS);
+    breakProgress = Math.min(1, breakProgress + (dt*1000) / breakTimeMs);
     const stage = Math.min(9, Math.floor(breakProgress * 10));
     setCrackStage(stage);
 
@@ -1762,6 +1835,7 @@ function animate(){
       // Don't break air or unbreakable
       if (code !== "air" && by > MIN_Y){
         setBlockEdit(bx,by,bz,"air");
+        swingHotbar();
         playSfx("break", 0.14);
         bumpShake(0.06);
         spawnBlockParticles(bx,by,bz, code);
@@ -1867,6 +1941,7 @@ function animate(){
     player.velocityY = player.jump;
     player.grounded = false;
     bumpShake(0.14);
+    swingHotbar();
     playSfx("jump");
   }
 
