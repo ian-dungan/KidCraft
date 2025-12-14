@@ -1,18 +1,77 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft Clone</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <title>KidCraft</title>
+
+  <!-- REQUIRED: Import map so Three.js example modules can resolve 'three' -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.175.0/build/three.module.js"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:," />
 </head>
 <body>
-    <div id="instructions">
-        Click to play!<br>
-        (W, A, S, D = Move, MOUSE = Look)<br>
-        (1-6 = Select Block: Stone, Dirt, Grass, Log, Leaf, Planks)
+  <!-- AUTH UI -->
+  <div id="auth">
+    <input id="username" placeholder="Username" autocomplete="username"/>
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password"/>
+    <button id="signup">Sign Up</button>
+    
+      <div class="row">
+        <label for="world-select">World</label>
+        <select id="world-select">
+          <option value="overworld">Overworld</option>
+          <option value="nether">Nether</option>
+          <option value="creative">Creative</option>
+        </select>
+      </div>
+    
+<button id="login">Log In</button>
+    <button id="guest">Guest</button>
+    <label class="toggle">
+      <input id="gyro" type="checkbox" />
+      <span>Gyro</span>
+    </label>
+    <p id="status"></p>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="hotbar"></div>
+    <div id="hint"></div>
+  </div>
+
+  <!-- Invisible mobile touch zones -->
+  <div id="touch-left" aria-hidden="true"></div>
+  <div id="touch-right" aria-hidden="true"></div>
+
+  <script type="module" src="main.js?v=MP4"></script>
+
+  <!-- Chat -->
+  <div id="chat" aria-live="polite">
+    <div id="chat-messages"></div>
+    <form id="chat-form">
+      <input id="chat-input" type="text" placeholder="Type message…" autocomplete="off" maxlength="200" />
+      <button id="chat-send" type="submit">Send</button>
+    </form>
+  </div>
+
+
+  <button id="crafting-toggle" title="Crafting">Craft</button>
+  <div id="crafting" style="display:none;">
+    <div class="crafting-header">
+      <div class="crafting-title">Crafting</div>
+      <button id="crafting-close" type="button">×</button>
     </div>
-    <div id="selected-block-ui">Selected: Stone</div>
-    <script type="module" src="main.js"></script>
+    <div id="crafting-list"></div>
+  </div>
+
 </body>
-</html> 
+</html>
