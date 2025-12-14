@@ -11,8 +11,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
@@ -672,8 +672,11 @@ function upsertOtherPlayer(uid, x,y,z, rotY){
 // DATABASE INTEGRATION (world_id + realtime)
 // =======================
 let worldId = null;
+let worldSlug = (localStorage.getItem('kidcraft_world') || 'overworld');
 let isGuest = false;
 let selfUsername = null;
+let selfRole = 'player';
+let mutedUntil = null;
 let realtimeChannels = [];
 
 /* =======================
@@ -776,9 +779,61 @@ async function loadRecentChat(){
     addChatLine(name, row.message, row.created_at);
   }
 }
+async function handleCommand(raw){
+  const parts = raw.trim().slice(1).split(/\s+/);
+  const cmd = (parts.shift()||"").toLowerCase();
+  if (cmd === "help"){
+    addChatLine("system", "Commands: /help, /whoami, /mute <username> <minutes> [reason], /admin promote <username> <mod|admin>, /admin demote <username>", new Date().toISOString());
+    return true;
+  }
+  if (cmd === "whoami"){
+    await refreshSelfProfile();
+      startMobTickerIfAllowed();
+    addChatLine("system", `You are ${selfUsername||"player"} (${selfRole})${isGuest ? " [guest]" : ""}.`, new Date().toISOString());
+    return true;
+  }
+  if (cmd === "mute"){
+    if (roleRank(selfRole) < 1) { addChatLine("system","You are not a moderator.", new Date().toISOString()); return true; }
+    const target = parts.shift();
+    const mins = parseInt(parts.shift()||"0",10);
+    const reason = parts.join(" ").slice(0,120);
+    if (!target || !mins) { addChatLine("system","Usage: /mute <username> <minutes> [reason]", new Date().toISOString()); return true; }
+    const { data, error } = await supabase.rpc("rpc_mute_user", { target_username: target, minutes: mins, reason });
+    if (error) addChatLine("system", "Mute failed: " + error.message, new Date().toISOString());
+    else addChatLine("system", data?.message || "Muted.", new Date().toISOString());
+    return true;
+  }
+  if (cmd === "admin"){
+    if (roleRank(selfRole) < 2) { addChatLine("system","You are not an admin.", new Date().toISOString()); return true; }
+    const sub = (parts.shift()||"").toLowerCase();
+    const target = parts.shift();
+    const role = (parts.shift()||"").toLowerCase();
+    if (sub === "promote"){
+      if (!target || !["mod","admin"].includes(role)) { addChatLine("system","Usage: /admin promote <username> <mod|admin>", new Date().toISOString()); return true; }
+      const { data, error } = await supabase.rpc("rpc_set_role", { target_username: target, new_role: role });
+      if (error) addChatLine("system","Promote failed: " + error.message, new Date().toISOString());
+      else addChatLine("system", data?.message || "Role updated.", new Date().toISOString());
+      return true;
+    }
+    if (sub === "demote"){
+      if (!target) { addChatLine("system","Usage: /admin demote <username>", new Date().toISOString()); return true; }
+      const { data, error } = await supabase.rpc("rpc_set_role", { target_username: target, new_role: "player" });
+      if (error) addChatLine("system","Demote failed: " + error.message, new Date().toISOString());
+      else addChatLine("system", data?.message || "Role updated.", new Date().toISOString());
+      return true;
+    }
+    addChatLine("system","Admin commands: /admin promote|demote ...", new Date().toISOString());
+    return true;
+  }
+  addChatLine("system", "Unknown command. Try /help", new Date().toISOString());
+  return true;
+}
+
 async function sendChat(message){
   if (!worldId || !userId()) return;
   const msg = (message||"").trim();
+  if (msg.startsWith('/')) return await handleCommand(msg);
+  if (isMutedNow()){ setHint('You are muted.'); return; }
   if (!msg) return;
   // Guests can chat (allowed)
   const { error } = await supabase.from("chat_messages").insert({
@@ -837,7 +892,24 @@ function subscribeRealtime(){
       })
     .subscribe();
 
-  realtimeChannels.push(ch1, ch2, ch3);
+
+  // Mobs
+  const ch4 = supabase.channel(`kidcraft_mobs_${worldId}`)
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "mobs", filter: `world_id=eq.${worldId}` },
+      (payload)=>{
+        const row = payload.new || payload.old;
+        if (!row) return;
+        if (payload.eventType === "DELETE"){
+          const mesh = mobs.get(row.id);
+          if (mesh){ scene.remove(mesh); mobs.delete(row.id); }
+          return;
+        }
+        upsertMob(row);
+      })
+    .subscribe();
+
+  realtimeChannels.push(ch1, ch2, ch3, ch4);
 }
 
 // =======================
@@ -886,7 +958,9 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
     setStatus("Auth OK. Creating profile...");
-    try { selfUsername = await ensurePlayerProfile(sess); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
+    try { selfUsername = await ensurePlayerProfile(sess);
+      await refreshSelfProfile();
+      startMobTickerIfAllowed(); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
     setStatus("Joining world...");
     await ensureWorld();
     if (!worldId){
@@ -983,4 +1057,136 @@ addEventListener("resize", ()=>{
 // Helpful debug if Supabase keys are unset
 if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
   setStatus("Set SUPABASE_URL and SUPABASE_ANON_KEY in main.js");
+}
+
+
+function getSelectedWorldSlug(){
+  const sel = document.getElementById('world-select');
+  const slug = (sel?.value || worldSlug || 'overworld');
+  worldSlug = slug;
+  localStorage.setItem('kidcraft_world', slug);
+  return slug;
+}
+
+
+async function refreshSelfProfile(){
+  if (!userId()) return;
+  const { data, error } = await supabase
+    .from("player_profiles")
+    .select("username, role, muted_until")
+    .eq("user_id", userId())
+    .maybeSingle();
+  if (error) return;
+  if (data?.username) selfUsername = data.username;
+  if (data?.role) selfRole = data.role;
+  mutedUntil = data?.muted_until || null;
+}
+function isMutedNow(){
+  if (!mutedUntil) return false;
+  const t = new Date(mutedUntil).getTime();
+  return Date.now() < t;
+}
+function roleRank(r){
+  return r === 'admin' ? 2 : (r === 'mod' ? 1 : 0);
+}
+
+
+/********************
+ * CRAFTING (RPC)
+ ********************/
+const craftingUI = {
+  toggle: document.getElementById("crafting-toggle"),
+  panel: document.getElementById("crafting"),
+  close: document.getElementById("crafting-close"),
+  list: document.getElementById("crafting-list"),
+};
+
+function setCraftingVisible(v){
+  if (!craftingUI.panel) return;
+  craftingUI.panel.style.display = v ? "" : "none";
+}
+if (craftingUI.toggle) craftingUI.toggle.addEventListener("click", ()=>{
+  const open = craftingUI.panel && craftingUI.panel.style.display !== "none";
+  setCraftingVisible(!open);
+});
+if (craftingUI.close) craftingUI.close.addEventListener("click", ()=> setCraftingVisible(false));
+
+async function loadRecipes(){
+  if (!craftingUI.list) return;
+  // Fetch recipes + ingredients (simple, small)
+  const { data, error } = await supabase
+    .from("recipes")
+    .select("code, name, output_material_code, output_qty, ingredients:recipe_ingredients(material_code, qty)")
+    .order("name", { ascending: true })
+    .limit(200);
+  if (error) { craftingUI.list.innerHTML = `<div>Recipes unavailable: ${escapeHtml(error.message)}</div>`; return; }
+
+  craftingUI.list.innerHTML = "";
+  for (const r of (data||[])){
+    const div = document.createElement("div");
+    div.className = "recipe";
+    const ings = (r.ingredients||[]).map(i => `${i.material_code}×${i.qty}`).join(", ");
+    div.innerHTML = `
+      <div class="recipe-head">
+        <div>
+          <div class="recipe-name">${escapeHtml(r.name)}</div>
+          <div class="recipe-ings">${escapeHtml(ings || "")}</div>
+        </div>
+        <button data-recipe="${escapeHtml(r.code)}">Craft</button>
+      </div>`;
+    div.querySelector("button").addEventListener("click", async ()=>{
+      if (!userId()) return;
+      const { data, error } = await supabase.rpc("rpc_craft", { recipe_code: r.code, craft_qty: 1, in_world_id: worldId });
+      if (error) return setHint("Craft failed: " + error.message);
+      setHint(data?.message || "Crafted!");
+    });
+    craftingUI.list.appendChild(div);
+  }
+}
+
+
+/********************
+ * MOBS (server-ticked, low frequency)
+ ********************/
+const mobs = new Map(); // mob_id -> mesh
+function mobMesh(type){
+  const geom = new THREE.BoxGeometry(0.9,0.9,0.9);
+  const mat = new THREE.MeshStandardMaterial({ color: type === "slime" ? 0x44ff66 : 0x66ccff });
+  const m = new THREE.Mesh(geom, mat);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+function upsertMob(row){
+  let mesh = mobs.get(row.id);
+  if (!mesh){
+    mesh = mobMesh(row.type);
+    scene.add(mesh);
+    mobs.set(row.id, mesh);
+  }
+  mesh.position.set(row.x, row.y, row.z);
+  mesh.rotation.y = row.yaw || 0;
+}
+async function loadMobs(){
+  if (!worldId) return;
+  // ensure baseline mobs exist
+  await supabase.rpc("rpc_ensure_mobs", { in_world_id: worldId });
+  const { data, error } = await supabase.from("mobs")
+    .select("id, world_id, type, x,y,z,yaw,hp, updated_at")
+    .eq("world_id", worldId)
+    .limit(200);
+  if (error) return;
+  for (const row of (data||[])) upsertMob(row);
+}
+let mobTickTimer = null;
+function startMobTickerIfAllowed(){
+  if (mobTickTimer) clearInterval(mobTickTimer);
+  mobTickTimer = null;
+  // Only mods/admins, non-guest, to avoid multiple tickers on free tier.
+  if (isGuest) return;
+  if (roleRank(selfRole) < 1) return;
+  mobTickTimer = setInterval(async ()=>{
+    if (!worldId) return;
+    await supabase.rpc("rpc_mob_tick", { in_world_id: worldId });
+  }, 1000);
 }

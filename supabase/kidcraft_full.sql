@@ -501,10 +501,6 @@ create policy "Materials Select Auth"
 
 -- Player profiles
 drop policy if exists "Profiles Select Own" on public.player_profiles;
-create policy "Profiles Select Own"
-  on public.player_profiles
-  for select
-  using (user_id = auth.uid());
 
 drop policy if exists "Profiles Insert Own" on public.player_profiles;
 create policy "Profiles Insert Own"
@@ -766,13 +762,8 @@ to authenticated
 using (true);
 
 -- ---------------------------
--- player_profiles (self-owned)
+-- player_profiles (public read, self write)
 -- ---------------------------
-create policy "Profiles Select Own"
-on public.player_profiles
-for select
-to authenticated
-using (auth.uid() = user_id);
 
 create policy "Profiles Insert Own"
 on public.player_profiles
@@ -1001,3 +992,318 @@ exception when duplicate_object then null; end $$;
 
 -- NOTE: If you want guests read-only for chat too, add `and public.is_non_guest()`
 -- to chat_insert_self.
+
+
+-- Roles / moderation
+alter table public.player_profiles
+  add column if not exists role text not null default 'player' check (role in ('player','mod','admin'));
+
+alter table public.player_profiles
+  add column if not exists muted_until timestamptz;
+
+alter table public.player_profiles
+  add column if not exists mute_reason text;
+
+
+do $$ begin
+  execute 'drop policy if exists "Profiles Select Own" on public.player_profiles';
+  execute 'drop policy if exists "Profiles Select Auth" on public.player_profiles';
+  create policy "Profiles Select Auth" on public.player_profiles for select to authenticated using (true);
+exception when undefined_table then null; end $$;
+
+
+-- Crafting
+create table if not exists public.recipes (
+  code text primary key,
+  name text not null,
+  output_material_code text not null references public.materials(code),
+  output_qty int not null check (output_qty > 0),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.recipe_ingredients (
+  recipe_code text not null references public.recipes(code) on delete cascade,
+  material_code text not null references public.materials(code),
+  qty int not null check (qty > 0),
+  primary key (recipe_code, material_code)
+);
+
+alter table public.recipes enable row level security;
+alter table public.recipe_ingredients enable row level security;
+
+do $$ begin
+  create policy "recipes_select" on public.recipes for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "recipe_ingredients_select" on public.recipe_ingredients for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
+
+
+insert into public.recipes (code, name, output_material_code, output_qty) values
+  ('planks_from_log', 'Planks (from Log)', 'oak_planks', 4),
+  ('sticks_from_planks', 'Sticks', 'stick', 4),
+  ('crafting_table', 'Crafting Table', 'crafting_table', 1)
+on conflict (code) do nothing;
+
+insert into public.recipe_ingredients (recipe_code, material_code, qty) values
+  ('planks_from_log', 'oak_log', 1),
+  ('sticks_from_planks', 'oak_planks', 2),
+  ('crafting_table', 'oak_planks', 4)
+on conflict (recipe_code, material_code) do nothing;
+
+
+-- Mobs
+create table if not exists public.mobs (
+  id uuid primary key default gen_random_uuid(),
+  world_id uuid not null references public.worlds(id) on delete cascade,
+  type text not null,
+  x real not null,
+  y real not null,
+  z real not null,
+  yaw real not null default 0,
+  hp int not null default 10,
+  state jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists mobs_world_idx on public.mobs(world_id);
+alter table public.mobs enable row level security;
+
+do $$ begin
+  create policy "mobs_select" on public.mobs for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
+
+-- Only mods/admins can update mobs via SECURITY DEFINER RPC (no direct policies)
+
+
+-- Role helpers
+create or replace function public.get_profile_role(uid uuid)
+returns text
+language sql
+stable
+as $$
+  select coalesce((select role from public.player_profiles where user_id = uid), 'player');
+$$;
+
+create or replace function public.rpc_set_role(target_username text, new_role text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  caller_role text;
+begin
+  caller_role := public.get_profile_role(auth.uid());
+  if caller_role <> 'admin' then
+    raise exception 'admin only';
+  end if;
+  if new_role not in ('player','mod','admin') then
+    raise exception 'invalid role';
+  end if;
+  update public.player_profiles
+    set role = new_role
+  where username = target_username;
+  if not found then
+    raise exception 'user not found';
+  end if;
+  return jsonb_build_object('ok', true, 'message', format('Set %s role to %s', target_username, new_role));
+end $$;
+
+create or replace function public.rpc_mute_user(target_username text, minutes int, reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  caller_role text;
+  until_ts timestamptz;
+begin
+  caller_role := public.get_profile_role(auth.uid());
+  if caller_role not in ('mod','admin') then
+    raise exception 'mod/admin only';
+  end if;
+  if minutes <= 0 then
+    raise exception 'minutes must be > 0';
+  end if;
+  until_ts := now() + make_interval(mins => minutes);
+  update public.player_profiles
+    set muted_until = until_ts,
+        mute_reason = reason
+  where username = target_username;
+  if not found then
+    raise exception 'user not found';
+  end if;
+  return jsonb_build_object('ok', true, 'message', format('Muted %s for %s minutes', target_username, minutes));
+end $$;
+
+-- Crafting RPC: consumes ingredients from main inventory and grants output.
+create or replace function public.rpc_craft(recipe_code text, craft_qty int, in_world_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  inv_id uuid;
+  out_code text;
+  out_qty int;
+  need record;
+  have_qty int;
+  out_mat_id int;
+  max_slots int := 36;
+  slot_i int;
+  existing record;
+  add_left int;
+  stack_max int := 64;
+begin
+  if craft_qty is null or craft_qty < 1 then craft_qty := 1; end if;
+
+  -- Ensure inventory exists for this world
+  insert into public.player_inventories(user_id, world_id, type)
+  values (auth.uid(), in_world_id, 'main')
+  on conflict (user_id, world_id, type) do nothing;
+
+  select id into inv_id
+  from public.player_inventories
+  where user_id = auth.uid() and world_id = in_world_id and type='main';
+
+  if inv_id is null then
+    raise exception 'inventory missing';
+  end if;
+
+  select r.output_material_code, r.output_qty
+    into out_code, out_qty
+  from public.recipes r
+  where r.code = recipe_code;
+
+  if out_code is null then
+    raise exception 'recipe not found';
+  end if;
+
+  -- Check ingredients
+  for need in
+    select material_code, qty from public.recipe_ingredients where recipe_code = recipe_code
+  loop
+    select coalesce(sum(s.quantity),0) into have_qty
+    from public.inventory_slots s
+    join public.materials m on m.id = s.material_id
+    where s.inventory_id = inv_id and m.code = need.material_code;
+
+    if have_qty < (need.qty * craft_qty) then
+      raise exception 'missing % (%)', need.material_code, (need.qty * craft_qty - have_qty);
+    end if;
+  end loop;
+
+  -- Consume ingredients across slots
+  for need in
+    select material_code, qty from public.recipe_ingredients where recipe_code = recipe_code
+  loop
+    have_qty := need.qty * craft_qty;
+
+    for existing in
+      select s.slot_index, s.quantity, s.material_id
+      from public.inventory_slots s
+      join public.materials m on m.id = s.material_id
+      where s.inventory_id = inv_id and m.code = need.material_code
+      order by s.slot_index
+    loop
+      exit when have_qty <= 0;
+      if existing.quantity <= have_qty then
+        have_qty := have_qty - existing.quantity;
+        delete from public.inventory_slots where inventory_id = inv_id and slot_index = existing.slot_index;
+      else
+        update public.inventory_slots
+          set quantity = quantity - have_qty
+        where inventory_id = inv_id and slot_index = existing.slot_index;
+        have_qty := 0;
+      end if;
+    end loop;
+  end loop;
+
+  -- Grant output
+  select id into out_mat_id from public.materials where code = out_code;
+  add_left := out_qty * craft_qty;
+
+  -- Fill existing stacks first
+  for existing in
+    select slot_index, quantity from public.inventory_slots
+    where inventory_id = inv_id and material_id = out_mat_id
+    order by slot_index
+  loop
+    exit when add_left <= 0;
+    if existing.quantity < stack_max then
+      update public.inventory_slots
+        set quantity = least(stack_max, quantity + add_left)
+      where inventory_id = inv_id and slot_index = existing.slot_index;
+      add_left := greatest(0, add_left - (stack_max - existing.quantity));
+    end if;
+  end loop;
+
+  -- Find empty slots for remaining
+  slot_i := 0;
+  while add_left > 0 and slot_i < max_slots loop
+    perform 1 from public.inventory_slots where inventory_id = inv_id and slot_index = slot_i;
+    if not found then
+      insert into public.inventory_slots(inventory_id, slot_index, material_id, quantity)
+      values (inv_id, slot_i, out_mat_id, least(stack_max, add_left));
+      add_left := greatest(0, add_left - stack_max);
+    end if;
+    slot_i := slot_i + 1;
+  end loop;
+
+  if add_left > 0 then
+    raise exception 'inventory full';
+  end if;
+
+  return jsonb_build_object('ok', true, 'message', format('Crafted %sx%s', out_code, out_qty*craft_qty));
+end $$;
+
+-- Ensure a few mobs exist in a world (idempotent)
+create or replace function public.rpc_ensure_mobs(in_world_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare c int;
+begin
+  select count(*) into c from public.mobs where world_id = in_world_id;
+  if c = 0 then
+    insert into public.mobs(world_id, type, x,y,z,yaw,hp)
+    values
+      (in_world_id, 'slime', 4, 3, 4, 0, 10),
+      (in_world_id, 'zombie', -4, 3, -4, 0, 20);
+  end if;
+end $$;
+
+-- Low-frequency mob tick: random wander (mods/admins only)
+create or replace function public.rpc_mob_tick(in_world_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare caller_role text;
+begin
+  caller_role := public.get_profile_role(auth.uid());
+  if caller_role not in ('mod','admin') then
+    return;
+  end if;
+  update public.mobs
+    set x = x + (random() - 0.5) * 0.6,
+        z = z + (random() - 0.5) * 0.6,
+        yaw = yaw + (random() - 0.5) * 0.4,
+        updated_at = now()
+  where world_id = in_world_id;
+end $$;
+
+
+-- Multiple worlds (idempotent)
+insert into public.worlds (slug, name, seed, settings) values
+  ('overworld', 'Overworld', 123456789, jsonb_build_object('type','overworld','mode','survival')),
+  ('nether', 'Nether', 987654321, jsonb_build_object('type','nether','mode','survival')),
+  ('creative', 'Creative', 555555555, jsonb_build_object('type','overworld','mode','creative'))
+on conflict (slug) do nothing;

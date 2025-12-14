@@ -22,7 +22,17 @@
     <input id="username" placeholder="Username" autocomplete="username"/>
     <input id="password" type="password" placeholder="Password" autocomplete="current-password"/>
     <button id="signup">Sign Up</button>
-    <button id="login">Log In</button>
+    
+      <div class="row">
+        <label for="world-select">World</label>
+        <select id="world-select">
+          <option value="overworld">Overworld</option>
+          <option value="nether">Nether</option>
+          <option value="creative">Creative</option>
+        </select>
+      </div>
+    
+<button id="login">Log In</button>
     <button id="guest">Guest</button>
     <label class="toggle">
       <input id="gyro" type="checkbox" />
@@ -41,7 +51,7 @@
   <div id="touch-left" aria-hidden="true"></div>
   <div id="touch-right" aria-hidden="true"></div>
 
-  <script type="module" src="main.js?v=MP3"></script>
+  <script type="module" src="main.js?v=MP4"></script>
 
   <!-- Chat -->
   <div id="chat" aria-live="polite">
@@ -50,6 +60,16 @@
       <input id="chat-input" type="text" placeholder="Type message…" autocomplete="off" maxlength="200" />
       <button id="chat-send" type="submit">Send</button>
     </form>
+  </div>
+
+
+  <button id="crafting-toggle" title="Crafting">Craft</button>
+  <div id="crafting" style="display:none;">
+    <div class="crafting-header">
+      <div class="crafting-title">Crafting</div>
+      <button id="crafting-close" type="button">×</button>
+    </div>
+    <div id="crafting-list"></div>
   </div>
 
 </body>
