@@ -192,6 +192,81 @@ const BLOCKS = [
   { code: "oak_planks", name: "Planks", color: 0xa06b2d },
 ];
 
+
+// =======================
+// === TOOLS + HARVEST RULES (Minecraft-ish) ===
+const TOOL_TIER = { hand:0, wood:1, stone:2, iron:3, diamond:4 };
+const TOOL_SPEED = { hand:1.0, wood:2.0, stone:4.0, iron:6.0, diamond:8.0 };
+
+const TOOLS = [
+  { kind:"tool", code:"wooden_pickaxe", display:"Wood Pick", toolType:"pickaxe", tier:"wood" },
+  { kind:"tool", code:"wooden_shovel",  display:"Wood Shovel", toolType:"shovel",  tier:"wood" },
+  { kind:"tool", code:"wooden_axe",     display:"Wood Axe",    toolType:"axe",     tier:"wood" },
+];
+
+let HOTBAR_ITEMS = []; // tools + blocks
+function getActiveItem(){
+  return HOTBAR_ITEMS[activeSlot] || { kind:"block", code: BLOCKS[activeSlot]?.code || "dirt" };
+}
+
+function requiredToolFor(code){
+  const c = String(code||"");
+  const lc = c.toLowerCase();
+  // Prefer DB props/tags if present
+  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
+  const rt = def?.props?.required_tool || def?.required_tool;
+  if (rt) return rt;
+
+  if (c === "grass_block" || c === "dirt" || c === "sand" || c === "gravel") return "shovel";
+  if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) return "axe";
+  if (lc.includes("stone") || lc.includes("cobble") || lc.includes("ore")) return "pickaxe";
+  return "hand";
+}
+
+function minToolTierFor(code){
+  const c = String(code||"");
+  const lc = c.toLowerCase();
+  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
+  const mt = def?.props?.min_tool_tier || def?.min_tool_tier;
+  if (mt) return mt;
+
+  // Minecraft-ish defaults
+  if (lc.includes("diamond") || lc.includes("emerald") || lc.includes("gold")) return "iron";
+  if (lc.includes("iron") || lc.includes("copper") || lc.includes("lapis") || lc.includes("redstone")) return "stone";
+  if (lc.includes("ore") || c === "stone" || c === "cobblestone") return "wood";
+  return "hand";
+}
+
+function dropForBlock(code){
+  const c = String(code||"");
+  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
+  const drop = def?.props?.drops || def?.drops;
+  if (drop) return drop;
+  // Minecraft-ish defaults
+  if (c === "grass_block") return "dirt";
+  if (c === "stone") return "cobblestone";
+  return c; // most blocks drop themselves
+}
+
+function canHarvestBlock(blockCode, toolItem){
+  const req = requiredToolFor(blockCode);
+  const minTier = TOOL_TIER[minToolTierFor(blockCode)] ?? 0;
+  const toolType = toolItem?.toolType || "hand";
+  const tier = TOOL_TIER[toolItem?.tier || "hand"] ?? 0;
+  if (req === "hand") return true;
+  if (toolType !== req) return false;
+  return tier >= minTier;
+}
+
+function toolSpeedMultiplier(blockCode, toolItem){
+  // If wrong tool type, slow down a lot (but still breakable)
+  const req = requiredToolFor(blockCode);
+  const toolType = toolItem?.toolType || "hand";
+  const tier = toolItem?.tier || "hand";
+  if (req !== "hand" && toolType !== req) return 0.25;
+  return TOOL_SPEED[tier] ?? 1.0;
+}
+
 // === Materials loaded from database (optional) ===
 let MATERIAL_DEFS = [];           // full list of block materials from DB
 let ORE_CODES = [];              // codes tagged 'ore'
@@ -243,6 +318,7 @@ async function loadMaterialsFromDB(){
     if (COMMON_BLOCKS.length >= 5){
       BLOCKS.length = 0;
       for (const b of COMMON_BLOCKS) BLOCKS.push(b);
+      HOTBAR_ITEMS = [];
       renderHotbar();
     }
     MATERIALS_READY = true;
@@ -333,22 +409,35 @@ let crackMat = null;
 const BREAK_TIME_MS_BASE = 520;      // base time (ms) for dirt-ish blocks
 let breakTimeMs = BREAK_TIME_MS_BASE;
 
-function breakTimeFor(code){
+function breakTimeFor(code, toolItem){
   const c = String(code||"");
   // Use DB hardness if available
   const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
   const h = def?.hardness;
-  if (typeof h === 'number' && isFinite(h)){
-    // hardness ~ 0..10+ : scale into 240..1400ms
-    return Math.max(220, Math.min(1600, 240 + h*120));
+
+  // Base time from hardness (Minecraft-ish)
+  // Minecraft hardness: dirt 0.5, stone 1.5, ore 3.0; we map into ms
+  let base = BREAK_TIME_MS_BASE;
+  if (typeof h === "number" && isFinite(h)){
+    // ~0.5 => ~380ms, 1.5 => ~900ms, 3.0 => ~1200ms, obsidian 50 => very long
+    base = Math.max(220, Math.min(6500, 180 + h*480));
+  } else {
+    const lc = c.toLowerCase();
+    if (c === "grass_block" || c === "dirt" || lc.includes("leaves")) base = 380;
+    else if (c === "sand" || c === "gravel") base = 430;
+    else if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) base = 620;
+    else if (lc.includes("ore")) base = 1200;
+    else if (c === "stone" || c === "cobblestone") base = 900;
+    else base = BREAK_TIME_MS_BASE;
   }
-  const lc = c.toLowerCase();
-  if (c === 'grass_block' || c === 'dirt' || lc.includes('leaves')) return 380;
-  if (c === 'sand' || c === 'gravel') return 430;
-  if (lc.includes('log') || lc.includes('plank') || lc.includes('wood')) return 620;
-  if (lc.includes('ore')) return 950;
-  if (c === 'stone' || c === 'cobblestone') return 900;
-  return BREAK_TIME_MS_BASE;
+
+  // Tool speed
+  const speed = toolSpeedMultiplier(c, toolItem);
+  // If wrong/too-low tool tier, still breakable but much slower (Minecraft-ish feel)
+  const harvestOk = canHarvestBlock(c, toolItem);
+  const tierPenalty = harvestOk ? 1.0 : 3.0;
+
+  return Math.max(120, base / Math.max(0.1, speed)) * tierPenalty;
 }
 
 function tex_crack(stage){
@@ -562,21 +651,46 @@ function swingHotbar(){
 }
 
 function renderHotbar(){
-  ui.hotbar.innerHTML = "";
-  // Show unique blocks (no forced repeats). Extra slots stay empty until you add more BLOCKS.
+  const el = document.getElementById("hotbar");
+  if (!el) return;
+  el.innerHTML = "";
+
+  // Build hotbar: tools first, then common blocks (no repeats)
+  if (!HOTBAR_ITEMS.length){
+    HOTBAR_ITEMS = [...TOOLS, ...BLOCKS.slice(0, Math.max(0, 9-TOOLS.length)).map(b=>({kind:"block", code:b.code, name:b.name, color:b.color}))];
+  }
+
   for (let i=0;i<9;i++){
+    const it = HOTBAR_ITEMS[i];
     const slot = document.createElement("div");
-    slot.className = "slot" + (i===hotbarIndex ? " active":"");
-    const b = BLOCKS[i];
-    if (b){
-      slot.textContent = b.name;
-      slot.title = `${b.code}`;
-      slot.dataset.code = b.code;
-    } else {
-      slot.textContent = "";
+    slot.className = "slot" + (i===activeSlot ? " active" : "");
+    if (!it){
       slot.classList.add("empty");
+      el.appendChild(slot);
+      continue;
     }
-    ui.hotbar.appendChild(slot);
+
+    // icon
+    const icon = document.createElement("div");
+    icon.className = "slot-icon";
+
+    if (it.kind === "tool"){
+      icon.textContent = it.code.includes("pickaxe") ? "⛏️" : it.code.includes("shovel") ? "🧹" : "🪓";
+      icon.style.filter = "drop-shadow(0 0 4px rgba(0,0,0,.35))";
+    } else {
+      // block
+      icon.style.background = `#${(it.color ?? colorFor(it.code)).toString(16).padStart(6,"0")}`;
+    }
+
+    const label = document.createElement("div");
+    label.className = "slot-label";
+    label.textContent = it.kind === "tool" ? it.display : (it.name || it.code);
+
+    slot.appendChild(icon);
+    slot.appendChild(label);
+    slot.onclick = ()=>{ activeSlot=i; renderHotbar(); };
+
+    el.appendChild(slot);
   }
 }
 renderHotbar();
@@ -1834,11 +1948,20 @@ function animate(){
       const code = getBlockCode(bx,by,bz);
       // Don't break air or unbreakable
       if (code !== "air" && by > MIN_Y){
+        const tool = getActiveItem();
+        const harvestOk = canHarvestBlock(code, tool);
+        const dropped = harvestOk ? dropForBlock(code) : null;
         setBlockEdit(bx,by,bz,"air");
         swingHotbar();
         playSfx("break", 0.14);
         bumpShake(0.06);
         spawnBlockParticles(bx,by,bz, code);
+        if (!harvestOk){
+          setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) — dropped nothing.`);
+        } else {
+          setHint(`Dropped: ${dropped}`);
+        }
+
         rebuildChunkAt(bx,bz);
         // also rebuild neighbors
         rebuildChunkAt(bx+1,bz);
@@ -2004,7 +2127,9 @@ if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
 
 
 function getSelectedWorldSlug(){
-  const sel = document.getElementById('world-select');
+  const active = getActiveItem();
+    if (active.kind === "tool"){ setHint("You are holding a tool — select a block to place."); return; }
+    const sel = document.getElementById('world-select');
   const slug = (sel?.value || worldSlug || 'overworld');
   worldSlug = slug;
   localStorage.setItem('kidcraft_world', slug);
