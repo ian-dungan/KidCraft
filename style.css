@@ -1,281 +1,40 @@
-html, body {
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background: #000;
-  font-family: system-ui, sans-serif;
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars */
 }
 
-canvas { display:block; }
-
-#auth {
-  position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10000;
-  background: rgba(0,0,0,0.6);
-  padding: 10px;
-  border-radius: 10px;
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-  color: #fff;
+canvas {
+    display: block; /* Remove extra space below canvas */
 }
 
-#auth input, #auth button {
-  padding: 8px;
-  font-size: 14px;
-  border-radius: 8px;
-  border: 0;
+#instructions {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 20px;
+    border-radius: 5px;
+    text-align: center;
+    font-family: sans-serif;
+    font-size: 1.2em;
+    cursor: pointer; /* Indicate it's clickable */
 }
 
-#auth button {
-  background: rgba(255,255,255,0.15);
-  color: #fff;
-}
+#selected-block-ui {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    padding: 10px 15px;
+    border-radius: 3px;
+    font-family: sans-serif;
+    font-size: 1em;
+} 
 
-#auth button:hover { background: rgba(255,255,255,0.22); cursor:pointer; }
-
-#status { margin: 0; font-size: 12px; opacity: 0.9; flex-basis: 100%; }
-
-.toggle { display:flex; align-items:center; gap:6px; font-size:12px; user-select:none; opacity:0.95; }
-
-#hud{
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 9000;
-  pointer-events: none;
-}
-
-#hotbar{
-  width: min(520px, 92vw);
-  margin: 0 auto 10px auto;
-  display: grid;
-  grid-template-columns: repeat(9, 1fr);
-  gap: 6px;
-}
-
-.slot{
-  height: 42px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.25);
-  background: rgba(0,0,0,0.35);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  color:#fff;
-  font-size: 11px;
-}
-
-.slot.active{ outline: 2px solid rgba(255,255,255,0.7); }
-
-#hint{
-  width: min(520px, 92vw);
-  margin: 0 auto 14px auto;
-  text-align:center;
-  color: rgba(255,255,255,0.85);
-  font-size: 12px;
-}
-
-/* Invisible mobile touch zones */
-#touch-left, #touch-right {
-  position: fixed;
-  bottom: 0;
-  height: 50vh;
-  width: 50vw;
-  z-index: 9999;
-  opacity: 0;
-  background: transparent;
-  touch-action: none;
-}
-
-#touch-left { left: 0; }
-#touch-right { right: 0; }
-
-/* Chat UI */
-#chat{
-  position: fixed;
-  left: 10px;
-  bottom: 12px;
-  width: min(380px, 92vw);
-  max-height: 36vh;
-  z-index: 9500;
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 12px;
-  padding: 10px;
-  backdrop-filter: blur(6px);
-}
-#chat-messages{
-  overflow: auto;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: rgba(255,255,255,0.9);
-}
-.chat-line{
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 10px;
-  padding: 6px 8px;
-  line-height: 1.25;
-  word-break: break-word;
-}
-.chat-meta{
-  font-size: 11px;
-  opacity: 0.75;
-  margin-bottom: 2px;
-}
-#chat-form{
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-#chat-input{
-  flex: 1 1 auto;
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.35);
-  color: #fff;
-  outline: none;
-}
-#chat-send{
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.12);
-  color: #fff;
-}
-#chat-send:hover{ cursor:pointer; background: rgba(255,255,255,0.18); }
-
-/* Mobile action buttons */
-#mobile-actions{
-  position: fixed;
-  right: 10px;
-  bottom: 120px;
-  z-index: 9700;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: auto;
-}
-
-#mobile-actions .action-row{
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-#mobile-actions button{
-  min-width: 62px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.45);
-  color: #fff;
-  font-weight: 600;
-  backdrop-filter: blur(6px);
-}
-
-#mobile-actions button:active{
-  transform: translateY(1px);
-}
-
-#mobile-actions .hotbar-nav{
-  align-items: center;
-  gap: 10px;
-}
-
-#hotbar-label{
-  min-width: 90px;
-  text-align: center;
-  font-size: 12px;
-  color: rgba(255,255,255,0.9);
-  padding: 8px 10px;
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 12px;
-}
-
-#crafting-toggle{
-  position: fixed;
-  right: 12px;
-  bottom: 12px;
-  z-index: 9600;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.35);
-  color: #fff;
-  padding: 10px 12px;
-  pointer-events: auto;
-}
-#crafting-toggle:hover{ cursor:pointer; background: rgba(255,255,255,0.12); }
-#crafting{  
-  position: fixed;
-  right: 12px;
-  bottom: 60px;
-  width: min(420px, 92vw);
-  max-height: 55vh;
-  overflow: auto;
-  z-index: 9600;
-  background: rgba(0,0,0,0.45);
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 14px;
-  padding: 10px;
-  backdrop-filter: blur(6px);
-  pointer-events: auto;
-  color: rgba(255,255,255,0.92);
-}
-.crafting-header{
-  display:flex; align-items:center; justify-content:space-between;
-  margin-bottom: 8px;
-}
-.crafting-title{ font-weight:700; }
-#crafting-close{
-  border-radius: 10px; border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10); color:#fff; padding: 4px 10px;
-}
-#crafting-close:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
-.recipe{
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 12px;
-  padding: 8px;
-  margin-bottom: 8px;
-  background: rgba(0,0,0,0.25);
-}
-.recipe-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.recipe-name{ font-weight: 700; }
-.recipe-ings{ opacity: 0.9; font-size: 12px; margin-top: 4px; }
-.recipe button{ 
-  border-radius: 10px; border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10); color:#fff; padding: 6px 10px;
-}
-.recipe button:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
-
-/* Responsive tweaks for mobile */
-@media (pointer: coarse) {
-  #chat{
-    left: 8px;
-    right: 8px;
-    width: auto;
-    bottom: 150px;
-    max-height: 32vh;
-  }
-
-  #mobile-actions[hidden]{
-    display: none;
-  }
-
-  #mobile-actions{
-    display: flex;
-  }
+@media (pointer: fine) {
+  #mobile-actions{ display:none !important; }
+  #touch-left, #touch-right{ display:none !important; }
 }

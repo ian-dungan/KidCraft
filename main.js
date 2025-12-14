@@ -1,1247 +1,546 @@
-// =====================================================
-// KidCraft Multiplayer + Persistence + Mobile Controls
-// =====================================================
+import * as THREE from 'three';
+// import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // Not needed
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { createNoise2D } from 'simplex-noise';
 
-// CDN-safe imports
-import * as THREE from "https://unpkg.com/three@0.175.0/build/three.module.js";
-import { PointerLockControls } from "https://unpkg.com/three@0.175.0/examples/jsm/controls/PointerLockControls.js";
-import { createNoise2D } from "https://unpkg.com/simplex-noise@4.0.3/dist/esm/simplex-noise.js";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// --- Constants ---
+const CHUNK_SIZE = 16; // Size of a chunk (blocks wide/deep)
+const RENDER_DISTANCE = 4; // Chunks to load around the player (4 means 9x9 chunks)
+const TEXTURE_SIZE = 16; // Small texture size for pixelated look
+const BLOCK_TYPES = { AIR: 'air', DIRT: 'dirt', GRASS: 'grass', STONE: 'stone', LOG: 'log', LEAF: 'leaf', PLANKS: 'planks' };
+const PLAYER_HEIGHT = 1.7;
+const GRAVITY = 0.01;
+const JUMP_FORCE = 0.15;
+const MOVE_SPEED = 0.1;
+const INTERACTION_DISTANCE = 5;
 
-// =======================
-// CONFIG (YOU MUST SET)
-// =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
-const WORLD_SLUG = "overworld"; // matches SQL seed
-
-// If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
-const ENABLE_GUEST_BUTTON = true;
-
-// =======================
-// SUPABASE
-// =======================
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-/* =======================
-   PROFILE + USERNAME (created in-game)
-   ======================= */
-function savePreferredUsername(u){
-    const n = normalizeUsername(u);
-    if (n) localStorage.setItem("kidcraft_username", n);
-}
-function getPreferredUsername(){
-    return normalizeUsername(localStorage.getItem("kidcraft_username") || "");
-}
-function isAnonymousSession(sess){
-    const u = sess?.user;
-    if (!u) return false;
-    const prov = u.app_metadata?.provider || (u.app_metadata?.providers && u.app_metadata.providers[0]);
-    return prov === "anonymous" || !u.email;
-}
-async function ensurePlayerProfile(session){
-    const user_id = session.user.id;
-    let username = getPreferredUsername() || `player_${user_id.slice(0,8)}`;
-
-    let { error } = await supabase
-        .from("player_profiles")
-        .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
-
-    if (error && /username|duplicate/i.test(error.message || "")) {
-        username = `${username}_${Math.random().toString(36).slice(2,6)}`;
-        savePreferredUsername(username);
-        const res2 = await supabase
-            .from("player_profiles")
-            .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
-        if (res2.error) throw res2.error;
-        return username;
+// --- Procedural Texture Generation (Simplified for brevity) ---
+function generateTexture(size, color, noiseAmount = 0.1) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    context.fillStyle = color;
+    context.fillRect(0, 0, size, size);
+    // Basic noise (same as before)
+    const imageData = context.getImageData(0, 0, size, size);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const noise = (Math.random() - 0.5) * 255 * noiseAmount;
+        data[i] = Math.max(0, Math.min(255, data[i] + noise));
+        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
+        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
     }
-    if (error) throw error;
-    savePreferredUsername(username);
-    return username;
-}
-const usernameCache = new Map(); // user_id -> username
-async function getUsernameForUserId(user_id){
-    if (!user_id) return null;
-    if (usernameCache.has(user_id)) return usernameCache.get(user_id);
-    const { data } = await supabase
-        .from("player_profiles")
-        .select("username")
-        .eq("user_id", user_id)
-        .maybeSingle();
-    const name = data?.username || null;
-    if (name) usernameCache.set(user_id, name);
-    return name;
+    context.putImageData(imageData, 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    return texture;
 }
 
-
-// Username-only auth (fake email)
-function normalizeUsername(u){
-  return (u || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 20);
+const dirtTexture = generateTexture(TEXTURE_SIZE, '#8B4513');
+const grassTopTexture = generateTexture(TEXTURE_SIZE, '#228B22', 0.05);
+const grassSideTexture = generateTexture(TEXTURE_SIZE, '#A0522D');
+const stoneTexture = generateTexture(TEXTURE_SIZE, '#808080', 0.15);
+const logTexture = generateTexture(TEXTURE_SIZE, '#654321', 0.08);
+const leafTexture = generateTexture(TEXTURE_SIZE, '#006400', 0.2);
+const plankTexture = generateTexture(TEXTURE_SIZE, '#DEB887', 0.03);
+// --- Add simple lines for plank texture ---
+const plankCanvas = plankTexture.image;
+const plankCtx = plankCanvas.getContext('2d');
+plankCtx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+plankCtx.lineWidth = Math.max(1, Math.floor(TEXTURE_SIZE / 8));
+for (let i = 0; i <= TEXTURE_SIZE; i += Math.floor(TEXTURE_SIZE / 4)) {
+    plankCtx.beginPath();
+    plankCtx.moveTo(i, 0);
+    plankCtx.lineTo(i, TEXTURE_SIZE);
+    plankCtx.stroke();
 }
-function usernameToEmail(u) {
-  const n = normalizeUsername(u);
-  return `${n}@kidcraft.local`;
-}
+plankTexture.needsUpdate = true;
 
-const ui = {
-  username: document.getElementById("username"),
-  password: document.getElementById("password"),
-  signup: document.getElementById("signup"),
-  login: document.getElementById("login"),
-  guest: document.getElementById("guest"),
-  status: document.getElementById("status"),
-  gyro: document.getElementById("gyro"),
-  hotbar: document.getElementById("hotbar"),
-  hint: document.getElementById("hint"),
-  mobileActions: document.getElementById("mobile-actions"),
-  mobileBreak: document.getElementById("mobile-break"),
-  mobilePlace: document.getElementById("mobile-place"),
-  mobileJump: document.getElementById("mobile-jump"),
-  hotbarPrev: document.getElementById("hotbar-prev"),
-  hotbarNext: document.getElementById("hotbar-next"),
-  hotbarLabel: document.getElementById("hotbar-label"),
+// --- Materials ---
+// Store materials by type for easy lookup
+const materials = {
+    [BLOCK_TYPES.DIRT]: new THREE.MeshStandardMaterial({ map: dirtTexture }),
+    [BLOCK_TYPES.STONE]: new THREE.MeshStandardMaterial({ map: stoneTexture }),
+    [BLOCK_TYPES.LOG]: new THREE.MeshStandardMaterial({ map: logTexture }),
+    [BLOCK_TYPES.LEAF]: new THREE.MeshStandardMaterial({ map: leafTexture, transparent: true, alphaTest: 0.1 }), // Use alphaTest for better leaf edges
+    [BLOCK_TYPES.PLANKS]: new THREE.MeshStandardMaterial({ map: plankTexture }),
+    [BLOCK_TYPES.GRASS]: [ // Order: +x, -x, +y (top), -y (bottom), +z, -z
+        new THREE.MeshStandardMaterial({ map: grassSideTexture }),
+        new THREE.MeshStandardMaterial({ map: grassSideTexture }),
+        new THREE.MeshStandardMaterial({ map: grassTopTexture }),
+        new THREE.MeshStandardMaterial({ map: dirtTexture }),
+        new THREE.MeshStandardMaterial({ map: grassSideTexture }),
+        new THREE.MeshStandardMaterial({ map: grassSideTexture })
+    ]
 };
 
-ui.guest.style.display = ENABLE_GUEST_BUTTON ? "" : "none";
+// --- Geometry (create once and reuse) ---
+const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
 
-function setStatus(msg){ ui.status.textContent = msg; }
-function setHint(msg){ ui.hint.textContent = msg; }
-
-ui.signup.onclick = async () => {
-  const raw = ui.username?.value || "";
-  const u = normalizeUsername(raw);
-  const p = ui.password?.value || "";
-  if (u.length < 3) return setStatus("Username must be 3+ chars (letters/numbers/_).");
-  if (p.length < 6) return setStatus("Password must be at least 6 characters.");
-  savePreferredUsername(u);
-  if (ui.username) ui.username.value = u;
-  const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
-  setStatus(error ? error.message : "Signed up. Now log in.");
-};
-
-ui.login.onclick = async () => {
-  const raw = ui.username?.value || "";
-  const u = normalizeUsername(raw);
-  const p = ui.password?.value || "";
-  if (u.length < 3) return setStatus("Enter a valid username.");
-  if (!p) return setStatus("Enter password.");
-  savePreferredUsername(u);
-  if (ui.username) ui.username.value = u;
-  const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
-  setStatus(error ? error.message : "Logged in.");
-};
-
-ui.guest.onclick = async () => {
-  // Requires: Supabase Auth -> Anonymous sign-ins enabled
-  const { error } = await supabase.auth.signInAnonymously();
-  setStatus(error ? error.message : "Guest session started.");
-
-  try {
-    const sess = await supabase.auth.getSession();
-    const uid = sess?.data?.session?.user?.id;
-    if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
-  } catch {}
-};
-
-// =======================
-// WORLD DATA STRUCTURES
-// =======================
+// --- Noise Setup ---
 const noise2D = createNoise2D();
+const noiseFrequency = 0.05;
+const noiseAmplitude = 10; // Increased amplitude for more variation
+const baseLevel = -10; // Lower base level
+const stoneDepth = 5; // How deep stone goes below dirt/grass
 
-// Simple voxel data: chunk key -> Map("x,y,z" => blockCode)
-const worldEdits = new Map(); // persisted server-side in world_blocks; cached client-side too.
-const chunkMeshes = new Map(); // chunkKey -> THREE.Group
-
-// Material palette (minimal starter; extend to your full materials table later)
-const BLOCKS = [
-  { code: "grass_block", name: "Grass", color: 0x2a8f3a },
-  { code: "dirt", name: "Dirt", color: 0x7a4f2a },
-  { code: "stone", name: "Stone", color: 0x7a7a7a },
-  { code: "sand", name: "Sand", color: 0xd7c87a },
-  { code: "oak_planks", name: "Planks", color: 0xa06b2d },
-];
-
-// =======================
-// THREE.JS SETUP
-// =======================
+// --- Scene Setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, RENDER_DISTANCE * CHUNK_SIZE * 0.5, RENDER_DISTANCE * CHUNK_SIZE); // Add fog based on render distance
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
-camera.rotation.order = "YXZ";
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+// --- Camera ---
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, RENDER_DISTANCE * CHUNK_SIZE * 1.2); // Adjust far plane based on render distance
+camera.position.set(CHUNK_SIZE / 2, baseLevel + noiseAmplitude + 10, CHUNK_SIZE / 2); // Start above potential terrain height
+
+// --- Renderer ---
+const renderer = new THREE.WebGLRenderer({ antialias: true }); // Antialias can be false for more pixelated look
+renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
+// --- Controls ---
 const controls = new PointerLockControls(camera, document.body);
-scene.add(controls.object);
+const instructions = document.getElementById('instructions'); // Make sure you have this element in HTML
+document.body.addEventListener('click', () => { controls.lock(); });
+controls.addEventListener('lock', () => { if(instructions) instructions.style.display = 'none'; });
+controls.addEventListener('unlock', () => { if(instructions) instructions.style.display = 'block'; });
+scene.add(controls.object); // Add camera controller to scene
 
-const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
-scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 0.7);
-dir.position.set(50, 120, 20);
-scene.add(dir);
+// --- Lighting ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+directionalLight.position.set(CHUNK_SIZE * 0.5, 50, CHUNK_SIZE * 0.5); // Position light relative to chunk size
+directionalLight.castShadow = false; // Disable shadows for now for performance
+scene.add(directionalLight);
 
-// Crosshair (desktop)
-const cross = document.createElement("div");
-cross.style.position="fixed"; cross.style.left="50%"; cross.style.top="50%";
-cross.style.width="10px"; cross.style.height="10px"; cross.style.marginLeft="-5px"; cross.style.marginTop="-5px";
-cross.style.border="2px solid rgba(255,255,255,0.65)"; cross.style.borderRadius="50%";
-cross.style.zIndex="8000"; cross.style.pointerEvents="none";
-document.body.appendChild(cross);
+// --- Chunk Management ---
+const chunks = new Map(); // Map<string, { group: THREE.Group, instancedMeshes: Map<string, THREE.InstancedMesh> }>
+let currentChunkX = Infinity;
+let currentChunkZ = Infinity;
 
-// Click to lock on desktop
-document.body.addEventListener("click", () => {
-  if (isMobile()) return;
-  // Guard: only request lock if supported and not already locked.
-  if (!document.body.requestPointerLock) return;
-  if (document.pointerLockElement) return;
-  try { controls.lock(); } catch {}
+function getChunkKey(cx, cz) {
+    return `${cx},${cz}`;
+}
+
+// --- Player State & Input ---
+const keys = { w: false, a: false, s: false, d: false, space: false };
+let playerVelocityY = 0;
+let onGround = false;
+let selectedBlockType = BLOCK_TYPES.PLANKS; // Start with planks
+
+document.addEventListener('keydown', (event) => {
+    if (!controls.isLocked) return;
+    switch (event.code) {
+        case 'KeyW': keys.w = true; break;
+        case 'KeyA': keys.a = true; break;
+        case 'KeyS': keys.s = true; break;
+        case 'KeyD': keys.d = true; break;
+        case 'Space': if (onGround) { playerVelocityY = JUMP_FORCE; onGround = false; } break; // Jump only if on ground
+        case 'Digit1': selectedBlockType = BLOCK_TYPES.STONE; updateSelectedBlockUI(); break;
+        case 'Digit2': selectedBlockType = BLOCK_TYPES.DIRT; updateSelectedBlockUI(); break;
+        case 'Digit3': selectedBlockType = BLOCK_TYPES.GRASS; updateSelectedBlockUI(); break;
+        case 'Digit4': selectedBlockType = BLOCK_TYPES.LOG; updateSelectedBlockUI(); break;
+        case 'Digit5': selectedBlockType = BLOCK_TYPES.LEAF; updateSelectedBlockUI(); break;
+        case 'Digit6': selectedBlockType = BLOCK_TYPES.PLANKS; updateSelectedBlockUI(); break;
+    }
 });
-function isMobile(){
-  return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-}
-
-// =======================
-// HOTBAR / INVENTORY (minimal)
-// =======================
-let hotbarIndex = 0;
-function renderHotbar(){
-  ui.hotbar.innerHTML = "";
-  for (let i=0;i<9;i++){
-    const slot = document.createElement("div");
-    slot.className = "slot" + (i===hotbarIndex ? " active":"");
-    const b = BLOCKS[i % BLOCKS.length];
-    slot.textContent = b ? b.name : "";
-    ui.hotbar.appendChild(slot);
-  }
-  updateHotbarLabel();
-}
-renderHotbar();
-
-addEventListener("keydown", (e)=>{
-  const n = parseInt(e.key,10);
-  if (n>=1 && n<=9){ hotbarIndex = n-1; renderHotbar(); }
-});
-
-function updateHotbarLabel(){
-  if (!ui.hotbarLabel) return;
-  const b = BLOCKS[hotbarIndex % BLOCKS.length];
-  ui.hotbarLabel.textContent = b ? b.name : "";
-}
-
-function changeHotbar(delta){
-  hotbarIndex = (hotbarIndex + delta + 9) % 9;
-  renderHotbar();
-}
-
-// =======================
-// INPUT (PC + MOBILE)
-// =======================
-const keys = {};
-addEventListener("keydown", e => { const k = (e.key||""); if(!k) return; keys[k.toLowerCase()] = true; });
-addEventListener("keyup", e => { const k = (e.key||""); if(!k) return; keys[k.toLowerCase()] = false; });
-
-// Mobile touch controls (invisible zones)
-const touchState = {
-  move: { id: null, startX:0, startY:0, active:false },
-  look: { id: null, lastX:0, lastY:0, active:false }
-};
-let touchMoveForward = 0;
-let touchMoveStrafe = 0;
-function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
-
-function setupTouchZones(){
-  const left = document.getElementById("touch-left");
-  const right = document.getElementById("touch-right");
-  if (!left || !right) return;
-
-  const DEADZONE = 10;
-  const MAX_DIST = 70;
-  const LOOK_SENS = 0.003;
-
-  left.addEventListener("touchstart", (e)=>{
-    const t = e.changedTouches[0]; if (!t) return;
-    touchState.move.id = t.identifier;
-    touchState.move.startX = t.clientX;
-    touchState.move.startY = t.clientY;
-    touchState.move.active = true;
-  }, {passive:false});
-
-  left.addEventListener("touchmove", (e)=>{
-    if (!touchState.move.active) return;
-    for (const t of e.changedTouches){
-      if (t.identifier !== touchState.move.id) continue;
-      const dx = t.clientX - touchState.move.startX;
-      const dy = t.clientY - touchState.move.startY;
-      let nx = 0, ny = 0;
-      if (Math.abs(dx) > DEADZONE) nx = dx / MAX_DIST;
-      if (Math.abs(dy) > DEADZONE) ny = dy / MAX_DIST;
-      touchMoveStrafe = clamp(nx, -1, 1);
-      touchMoveForward = clamp(-ny, -1, 1);
-      e.preventDefault();
-      break;
+document.addEventListener('keyup', (event) => {
+    switch (event.code) {
+        case 'KeyW': keys.w = false; break;
+        case 'KeyA': keys.a = false; break;
+        case 'KeyS': keys.s = false; break;
+        case 'KeyD': keys.d = false; break;
+        case 'Space': keys.space = false; break;
     }
-  }, {passive:false});
-
-  const endMove = (e)=>{
-    for (const t of (e.changedTouches||[])){
-      if (t.identifier !== touchState.move.id) continue;
-      touchState.move.active = false;
-      touchState.move.id = null;
-      touchMoveForward = 0;
-      touchMoveStrafe = 0;
-      break;
-    }
-  };
-  left.addEventListener("touchend", endMove, {passive:false});
-  left.addEventListener("touchcancel", endMove, {passive:false});
-
-  right.addEventListener("touchstart", (e)=>{
-    const t = e.changedTouches[0]; if (!t) return;
-    touchState.look.id = t.identifier;
-    touchState.look.lastX = t.clientX;
-    touchState.look.lastY = t.clientY;
-    touchState.look.active = true;
-  }, {passive:false});
-
-  right.addEventListener("touchmove", (e)=>{
-    if (!touchState.look.active) return;
-    const yawObject = controls.object;
-    const pitchObject = camera;
-
-    for (const t of e.changedTouches){
-      if (t.identifier !== touchState.look.id) continue;
-      const dx = t.clientX - touchState.look.lastX;
-      const dy = t.clientY - touchState.look.lastY;
-      touchState.look.lastX = t.clientX;
-      touchState.look.lastY = t.clientY;
-      yawObject.rotation.y -= dx * LOOK_SENS;
-      pitchObject.rotation.x = clamp(pitchObject.rotation.x - dy * LOOK_SENS, -Math.PI/2, Math.PI/2);
-      pitchObject.rotation.z = 0; yawObject.rotation.z = 0;
-      e.preventDefault();
-      break;
-    }
-  }, {passive:false});
-
-  const endLook = (e)=>{
-    for (const t of (e.changedTouches||[])){
-      if (t.identifier !== touchState.look.id) continue;
-      touchState.look.active = false;
-      touchState.look.id = null;
-      break;
-    }
-  };
-  right.addEventListener("touchend", endLook, {passive:false});
-  right.addEventListener("touchcancel", endLook, {passive:false});
-}
-setupTouchZones();
-
-function setupMobileButtons(){
-  const updateVisibility = ()=>{
-    if (ui.mobileActions) ui.mobileActions.hidden = !isMobile();
-  };
-  updateVisibility();
-  addEventListener("resize", updateVisibility);
-
-  const intercept = (e)=>{ e.preventDefault(); e.stopPropagation(); };
-
-  ui.mobileBreak?.addEventListener("click", async (e)=>{ intercept(e); await breakSelectedBlock(); });
-  ui.mobilePlace?.addEventListener("click", async (e)=>{ intercept(e); await placeSelectedBlock(); });
-  ui.mobileJump?.addEventListener("click", (e)=>{ intercept(e); attemptJump(); });
-  ui.hotbarPrev?.addEventListener("click", (e)=>{ intercept(e); changeHotbar(-1); });
-  ui.hotbarNext?.addEventListener("click", (e)=>{ intercept(e); changeHotbar(1); });
-}
-setupMobileButtons();
-
-// Gyro aiming (optional)
-let gyroEnabled = false;
-let lastAlpha = null, lastBeta = null;
-ui.gyro.addEventListener("change", async () => {
-  if (!ui.gyro.checked) { gyroEnabled = false; lastAlpha = lastBeta = null; return; }
-  // iOS requires user gesture + permission request
-  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-    try {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res !== "granted") { ui.gyro.checked = false; return; }
-    } catch {
-      ui.gyro.checked = false;
-      return;
-    }
-  }
-  gyroEnabled = true;
-});
-window.addEventListener("deviceorientation", (e)=>{
-  if (!gyroEnabled) return;
-  if (e.alpha == null || e.beta == null) return;
-  // Alpha = compass-ish yaw, beta = pitch
-  if (lastAlpha == null) { lastAlpha = e.alpha; lastBeta = e.beta; return; }
-  const da = (e.alpha - lastAlpha);
-  const db = (e.beta - lastBeta);
-  lastAlpha = e.alpha; lastBeta = e.beta;
-
-  // Scale to radians
-  const yawObject = controls.object;
-  yawObject.rotation.y -= (da * Math.PI/180) * 0.5;
-  camera.rotation.x = clamp(camera.rotation.x - (db * Math.PI/180) * 0.5, -Math.PI/2, Math.PI/2);
-  camera.rotation.z = 0; yawObject.rotation.z = 0;
-}, true);
-
-// =======================
-// PLAYER
-// =======================
-const player = {
-  velocityY: 0,
-  grounded: false,
-  speed: 6.0,
-  jump: 7.0,
-};
-controls.object.position.set(0, 20, 0);
-camera.rotation.x = 0;
-
-function attemptJump(){
-  if (!player.grounded) return false;
-  player.velocityY = player.jump;
-  player.grounded = false;
-  return true;
-}
-
-const raycaster = new THREE.Raycaster();
-const tempVec = new THREE.Vector3();
-
-// =======================
-// VOXEL WORLD (simple procedural + server edits)
-// =======================
-const CHUNK = 16;
-const VIEW_CHUNKS = 3; // radius in chunks for streaming
-const BLOCK_SIZE = 1;
-
-function chunkKey(cx, cz){ return `${cx},${cz}`; }
-function worldToChunk(x,z){ return [Math.floor(x/CHUNK), Math.floor(z/CHUNK)]; }
-function blockKey(x,y,z){ return `${x},${y},${z}`; }
-
-function terrainHeight(x,z){
-  // Simple noise-based terrain (0..64)
-  const n = noise2D(x*0.03, z*0.03);
-  const h = 18 + Math.floor((n+1)*10);
-  return h;
-}
-
-function getBlockCode(x,y,z){
-  // server/client edits override
-  const [cx, cz] = worldToChunk(x,z);
-  const k = chunkKey(cx, cz);
-  const map = worldEdits.get(k);
-  if (map){
-    const v = map.get(blockKey(x,y,z));
-    if (v === "__air__") return "air";
-    if (v) return v;
-  }
-
-  const h = terrainHeight(x,z);
-  if (y > h) return "air";
-  if (y === h) return "grass_block";
-  if (y >= h-3) return "dirt";
-  return "stone";
-}
-
-const geom = new THREE.BoxGeometry(1,1,1);
-const materialsByCode = new Map();
-function matFor(code){
-  if (materialsByCode.has(code)) return materialsByCode.get(code);
-  const def = BLOCKS.find(b=>b.code===code) || { color: 0xaaaaaa };
-  const m = new THREE.MeshStandardMaterial({ color: def.color });
-  materialsByCode.set(code, m);
-  return m;
-}
-
-function buildChunk(cx, cz){
-  const k = chunkKey(cx, cz);
-  if (chunkMeshes.has(k)) return;
-
-  const group = new THREE.Group();
-  group.userData = { cx, cz };
-  const map = worldEdits.get(k) || new Map();
-  worldEdits.set(k, map);
-
-  const baseX = cx * CHUNK;
-  const baseZ = cz * CHUNK;
-
-  for (let x=0;x<CHUNK;x++){
-    for (let z=0;z<CHUNK;z++){
-      const wx = baseX + x;
-      const wz = baseZ + z;
-      const h = terrainHeight(wx, wz);
-      for (let y=0;y<=h;y++){
-        const code = getBlockCode(wx,y,wz);
-        if (code === "air") continue;
-        const mesh = new THREE.Mesh(geom, matFor(code));
-        mesh.position.set(wx+0.5, y+0.5, wz+0.5);
-        mesh.userData = { x:wx, y, z:wz, code };
-        group.add(mesh);
-      }
-    }
-  }
-
-  chunkMeshes.set(k, group);
-  scene.add(group);
-}
-
-function rebuildChunk(cx, cz){
-  const k = chunkKey(cx, cz);
-  const old = chunkMeshes.get(k);
-  if (old){
-    scene.remove(old);
-    old.traverse(o=>{
-      if (o.isMesh){
-        o.geometry.dispose?.();
-        // shared materials; don't dispose
-      }
-    });
-    chunkMeshes.delete(k);
-  }
-  buildChunk(cx, cz);
-}
-
-function streamChunksAround(px, pz){
-  const [pcx, pcz] = worldToChunk(px, pz);
-  // build needed
-  for (let dx=-VIEW_CHUNKS; dx<=VIEW_CHUNKS; dx++){
-    for (let dz=-VIEW_CHUNKS; dz<=VIEW_CHUNKS; dz++){
-      buildChunk(pcx+dx, pcz+dz);
-    }
-  }
-  // cull far
-  for (const k of chunkMeshes.keys()){
-    const [cx, cz] = k.split(",").map(Number);
-    if (Math.abs(cx-pcx) > VIEW_CHUNKS+1 || Math.abs(cz-pcz) > VIEW_CHUNKS+1){
-      const g = chunkMeshes.get(k);
-      scene.remove(g);
-      chunkMeshes.delete(k);
-    }
-  }
-}
-
-// =======================
-// BLOCK PLACING / BREAKING
-// =======================
-function raycastBlock(){
-  // Cast from camera center
-  raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
-  const intersects = raycaster.intersectObjects([...chunkMeshes.values()], true);
-  const hit = intersects.find(i => i.object?.isMesh);
-  if (!hit) return null;
-  return hit;
-}
-
-function getSelectedBlockCode(){
-  return BLOCKS[hotbarIndex % BLOCKS.length].code;
-}
-
-async function breakSelectedBlock(){
-  const hit = raycastBlock();
-  if (!hit) return false;
-  const { x,y,z } = hit.object.userData;
-  if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return false; }
-  applyEditLocal(worldId, x,y,z, "air");
-  if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
-  return true;
-}
-
-async function placeSelectedBlock(){
-  const hit = raycastBlock();
-  if (!hit) return false;
-  const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
-  const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-  const code = getSelectedBlockCode();
-  if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return false; }
-  applyEditLocal(worldId, x,y,z, code);
-  if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
-  return true;
-}
-
-// Right-click / tap to place, left-click to break (desktop)
-// On mobile: use two-finger tap to place, one-finger tap to break (simple)
-let lastTapTime = 0;
-
-function applyEditLocal(world_id, x,y,z, code){
-  const [cx, cz] = worldToChunk(x,z);
-  const k = chunkKey(cx, cz);
-  const map = worldEdits.get(k) || new Map();
-  worldEdits.set(k, map);
-  map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
-  cacheEdit(world_id, x,y,z, code);
-  rebuildChunk(cx, cz);
-}
-
-async function placeBlockServer(world_id, x,y,z, code){
-  // Writes to world_blocks (authoritative) + logs block_updates
-  await supabase.from("world_blocks").upsert({ world_id, x, y, z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: currentUserId(), x,y,z, action:"place", block_type: code });
-}
-
-async function breakBlockServer(world_id, x,y,z){
-  await supabase.from("world_blocks").upsert({ world_id, x,y,z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: currentUserId(), x,y,z, action:"break", block_type: "air" });
-}
-
-function currentUserId(){
-  return (supabase.auth.getUser && supabase.auth.getUser()) ? null : null;
-}
-
-// We'll store user id from session
-let sessionUserId = null;
-function setSessionUserId(s){
-  sessionUserId = s?.user?.id || null;
-}
-function userId(){ return sessionUserId; }
-
-// Desktop mouse controls
-window.addEventListener("contextmenu", e=>e.preventDefault());
-window.addEventListener("mousedown", async (e)=>{
-  if (isMobile()) return;
-  if (e.button === 0){ // break
-    await breakSelectedBlock();
-  } else if (e.button === 2){ // place
-    await placeSelectedBlock();
-  }
 });
 
-// Mobile tap controls
-window.addEventListener("touchend", async (e)=>{
-  if (!isMobile()) return;
-  const now = performance.now();
-  const twoFinger = e.touches && e.touches.length >= 2;
-  const doubleTap = (now - lastTapTime) < 260;
-  lastTapTime = now;
-
-  const hit = raycastBlock();
-  if (!hit) return;
-
-  if (doubleTap || twoFinger){
-    await placeSelectedBlock();
-  } else {
-    await breakSelectedBlock();
-  }
-}, { passive: true });
-
-// =======================
-// MULTIPLAYER: PLAYER VISIBILITY
-// =======================
-
-/* =======================
-   NAME TAGS (Sprite labels)
-   ======================= */
-function roundRect(ctx, x, y, w, h, r, fill, stroke) {
-    if (w < 2 * r) r = w / 2;
-    if (h < 2 * r) r = h / 2;
-    ctx.beginPath();
-    ctx.moveTo(x+r, y);
-    ctx.arcTo(x+w, y,   x+w, y+h, r);
-    ctx.arcTo(x+w, y+h, x,   y+h, r);
-    ctx.arcTo(x,   y+h, x,   y,   r);
-    ctx.arcTo(x,   y,   x+w, y,   r);
-    ctx.closePath();
-    if (fill) ctx.fill();
-    if (stroke) ctx.stroke();
-}
-
-function makeNameTag(text){
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    canvas.width = 256;
-    canvas.height = 64;
-
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    roundRect(ctx, 8, 8, 240, 48, 10, true, false);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 26px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.minFilter = THREE.LinearFilter;
-    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(2.6, 0.65, 1);
-    sprite.position.set(0, 1.8, 0);
-    sprite.userData._tagCanvas = canvas;
-    sprite.userData._tagCtx = ctx;
-    sprite.userData._tagTexture = texture;
-    return sprite;
-}
-
-function updateNameTag(sprite, text){
-    const canvas = sprite.userData._tagCanvas;
-    const ctx = sprite.userData._tagCtx;
-    if (!canvas || !ctx) return;
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    roundRect(ctx, 8, 8, 240, 48, 10, true, false);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 26px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
-    sprite.userData._tagTexture.needsUpdate = true;
-}
-
-const otherPlayers = new Map(); // user_id -> mesh
-function playerMesh(color=0x55aaff){
-  const m = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.35, 1.0, 6, 10),
-    new THREE.MeshStandardMaterial({ color })
-  );
-  m.castShadow = false;
-  m.receiveShadow = false;
-  return m;
-}
-
-function upsertOtherPlayer(uid, x,y,z, rotY){
-  if (!uid || uid === userId()) return;
-  let mesh = otherPlayers.get(uid);
-  if (!mesh){
-    mesh = playerMesh(0xffaa55);
-        const tag = makeNameTag('...');
-        mesh.add(tag);
-        mesh.userData.nameTag = tag;
-    otherPlayers.set(uid, mesh);
-    scene.add(mesh);
-  }
-  mesh.position.set(x, y, z);
-  mesh.rotation.y = rotY || 0;
-  (async ()=>{
-    const name = await getUsernameForUserId(uid);
-    if (name && mesh.userData.nameTag) updateNameTag(mesh.userData.nameTag, name);
-  })();
-}
-
-// =======================
-// DATABASE INTEGRATION (world_id + realtime)
-// =======================
-let worldId = null;
-let worldSlug = (localStorage.getItem('kidcraft_world') || 'overworld');
-let isGuest = false;
-let selfUsername = null;
-let selfRole = 'player';
-let mutedUntil = null;
-let realtimeChannels = [];
-
-/* =======================
-   SPAWN PROTECTION
-   ======================= */
-const SPAWN_X = 0;
-const SPAWN_Z = 0;
-const SPAWN_PROTECT_RADIUS = 10; // blocks
-const SPAWN_PROTECT_SECONDS = 20; // seconds after login
-let spawnProtectUntil = 0;
-
-function inSpawnProtection(x, z){
-    const dx = x - SPAWN_X;
-    const dz = z - SPAWN_Z;
-    return (dx*dx + dz*dz) <= (SPAWN_PROTECT_RADIUS*SPAWN_PROTECT_RADIUS);
-}
-
-let lastStatePush = 0;
-
-async function ensureWorld(){
-  const { data, error } = await supabase.from("worlds").select("id,slug").eq("slug", WORLD_SLUG).maybeSingle();
-  if (error) { console.warn(error); return null; }
-  worldId = data?.id || null;
-  return worldId;
-}
-
-async function pushPlayerState(){
-  if (!worldId || !userId()) return;
-  const now = performance.now();
-  if (now - lastStatePush < 250) return; // ~4 updates/sec (free-tier friendly)
-  lastStatePush = now;
-
-  
-  // Only send if changed meaningfully
-  if (!pushPlayerState._lastSent) pushPlayerState._lastSent = {x:0,y:0,z:0,r:0};
-  const ls = pushPlayerState._lastSent;
-  const p = controls.object.position;
-  const r = controls.object.rotation.y;
-  const moved = Math.hypot(p.x-ls.x, p.y-ls.y, p.z-ls.z) > 0.05;
-  const turned = Math.abs(r-ls.r) > 0.01;
-  if (!moved && !turned) return;
-  ls.x=p.x; ls.y=p.y; ls.z=p.z; ls.r=r;
-  await supabase.from("player_state").upsert({
-    user_id: userId(),
-    world_id: worldId,
-    pos_x: p.x, pos_y: p.y, pos_z: p.z,
-    rot_y: controls.object.rotation.y,
-    updated_at: new Date().toISOString()
-  });
-}
-
-async function pullNearbyWorldBlocks(){
-  // Minimal: pull edits around player into client cache. (Your SQL stores material_id; we store block_type via block_updates currently.)
-  // This is a placeholder for your full material_id mapping (materials table).
-  // We'll still cache by listening to block_updates realtime.
-}
-
-function clearRealtime(){
-  for (const ch of realtimeChannels){
-    try { supabase.removeChannel(ch); } catch {}
-  }
-  realtimeChannels = [];
-}
-
-
-/* =======================
-   CHAT (Realtime)
-   ======================= */
-const chat = {
-  root: document.getElementById("chat"),
-  messages: document.getElementById("chat-messages"),
-  form: document.getElementById("chat-form"),
-  input: document.getElementById("chat-input"),
-};
-function escapeHtml(s){
-  return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function addChatLine(username, msg, ts){
-  if (!chat.messages) return;
-  const line = document.createElement("div");
-  line.className = "chat-line";
-  const time = ts ? new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
-  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} • ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
-  chat.messages.appendChild(line);
-  chat.messages.scrollTop = chat.messages.scrollHeight;
-}
-async function loadRecentChat(){
-  if (!worldId) return;
-  const { data, error } = await supabase
-    .from("chat_messages")
-    .select("id, world_id, user_id, message, created_at")
-    .eq("world_id", worldId)
-    .order("created_at", { ascending: true })
-    .limit(40);
-  if (error) { console.warn("chat load:", error.message); return; }
-  chat.messages.innerHTML = "";
-  for (const row of data){
-    const name = await getUsernameForUserId(row.user_id) || "player";
-    addChatLine(name, row.message, row.created_at);
-  }
-}
-async function handleCommand(raw){
-  const parts = raw.trim().slice(1).split(/\s+/);
-  const cmd = (parts.shift()||"").toLowerCase();
-  if (cmd === "help"){
-    addChatLine("system", "Commands: /help, /whoami, /mute <username> <minutes> [reason], /admin promote <username> <mod|admin>, /admin demote <username>", new Date().toISOString());
-    return true;
-  }
-  if (cmd === "whoami"){
-    await refreshSelfProfile();
-      startMobTickerIfAllowed();
-    addChatLine("system", `You are ${selfUsername||"player"} (${selfRole})${isGuest ? " [guest]" : ""}.`, new Date().toISOString());
-    return true;
-  }
-  if (cmd === "mute"){
-    if (roleRank(selfRole) < 1) { addChatLine("system","You are not a moderator.", new Date().toISOString()); return true; }
-    const target = parts.shift();
-    const mins = parseInt(parts.shift()||"0",10);
-    const reason = parts.join(" ").slice(0,120);
-    if (!target || !mins) { addChatLine("system","Usage: /mute <username> <minutes> [reason]", new Date().toISOString()); return true; }
-    const { data, error } = await supabase.rpc("rpc_mute_user", { target_username: target, minutes: mins, reason });
-    if (error) addChatLine("system", "Mute failed: " + error.message, new Date().toISOString());
-    else addChatLine("system", data?.message || "Muted.", new Date().toISOString());
-    return true;
-  }
-  if (cmd === "admin"){
-    if (roleRank(selfRole) < 2) { addChatLine("system","You are not an admin.", new Date().toISOString()); return true; }
-    const sub = (parts.shift()||"").toLowerCase();
-    const target = parts.shift();
-    const role = (parts.shift()||"").toLowerCase();
-    if (sub === "promote"){
-      if (!target || !["mod","admin"].includes(role)) { addChatLine("system","Usage: /admin promote <username> <mod|admin>", new Date().toISOString()); return true; }
-      const { data, error } = await supabase.rpc("rpc_set_role", { target_username: target, new_role: role });
-      if (error) addChatLine("system","Promote failed: " + error.message, new Date().toISOString());
-      else addChatLine("system", data?.message || "Role updated.", new Date().toISOString());
-      return true;
+function updateSelectedBlockUI() {
+    const selectedBlockElement = document.getElementById('selected-block-ui'); // Needs corresponding HTML element
+    if (selectedBlockElement) {
+        selectedBlockElement.textContent = `Selected: ${selectedBlockType.charAt(0).toUpperCase() + selectedBlockType.slice(1)}`;
     }
-    if (sub === "demote"){
-      if (!target) { addChatLine("system","Usage: /admin demote <username>", new Date().toISOString()); return true; }
-      const { data, error } = await supabase.rpc("rpc_set_role", { target_username: target, new_role: "player" });
-      if (error) addChatLine("system","Demote failed: " + error.message, new Date().toISOString());
-      else addChatLine("system", data?.message || "Role updated.", new Date().toISOString());
-      return true;
-    }
-    addChatLine("system","Admin commands: /admin promote|demote ...", new Date().toISOString());
-    return true;
-  }
-  addChatLine("system", "Unknown command. Try /help", new Date().toISOString());
-  return true;
+    console.log("Selected:", selectedBlockType);
 }
 
-async function sendChat(message){
-  if (!worldId || !userId()) return;
-  const msg = (message||"").trim();
-  if (msg.startsWith('/')) return await handleCommand(msg);
-  if (isMutedNow()){ setHint('You are muted.'); return; }
-  if (!msg) return;
-  // Guests can chat (allowed)
-  const { error } = await supabase.from("chat_messages").insert({
-    world_id: worldId,
-    user_id: userId(),
-    message: msg
-  });
-  if (error) console.warn("chat send:", error.message);
-}
+// --- Raycasting Setup ---
+const interactionRaycaster = new THREE.Raycaster();
+const groundCheckRaycaster = new THREE.Raycaster();
+const downVector = new THREE.Vector3(0, -1, 0);
+interactionRaycaster.far = INTERACTION_DISTANCE; // Set max distance for interaction raycaster
+groundCheckRaycaster.far = PLAYER_HEIGHT + 0.2; // Max distance slightly more than player height for ground check
 
-if (chat.form){
-  chat.form.addEventListener("submit", async (e)=>{
-    e.preventDefault();
-    const msg = chat.input.value;
-    chat.input.value = "";
-    await sendChat(msg);
-  });
-}
+// --- Helper for Block Placement ---
+const worldObjects = []; // Includes chunk groups and manually placed blocks
 
-function subscribeRealtime(){
-  if (!worldId) return;
+// --- World Generation Functions ---
 
-  // Player state updates
-  const ch1 = supabase.channel(`kidcraft_state_${worldId}`)
-    .on("postgres_changes",
-      { event: "UPDATE", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
-      (payload)=>{
-        const row = payload.new || payload.old;
-        if (!row) return;
-        upsertOtherPlayer(row.user_id, row.pos_x, row.pos_y, row.pos_z, row.rot_y);
-      })
-    .subscribe();
+// Calculates block data for a chunk without creating meshes
+function generateChunkData(chunkX, chunkZ) {
+    const blocks = new Map(); // Map<string, BLOCK_TYPES> key: "x,y,z"
+    const startWorldX = chunkX * CHUNK_SIZE;
+    const startWorldZ = chunkZ * CHUNK_SIZE;
 
-  // Block updates (authoritative for edits here)
-  const ch2 = supabase.channel(`kidcraft_blocks_${worldId}`)
-    .on("postgres_changes",
-      { event: "INSERT", schema: "public", table: "block_updates", filter: `world_id=eq.${worldId}` },
-      (payload)=>{
-        const row = payload.new;
-        if (!row || row.world_id !== worldId) return;
-        const code = row.action === "break" ? "air" : (row.block_type || "stone");
-        applyEditLocal(worldId, row.x, row.y, row.z, code);
-      })
-    .subscribe();
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+        for (let z = 0; z < CHUNK_SIZE; z++) {
+            const worldX = startWorldX + x;
+            const worldZ = startWorldZ + z;
 
+            const noiseVal = noise2D(worldX * noiseFrequency, worldZ * noiseFrequency);
+            const heightVariation = (noiseVal + 1) / 2 * noiseAmplitude;
+            const topY = Math.floor(baseLevel + heightVariation);
 
-  // Chat messages
-  const ch3 = supabase.channel(`kidcraft_chat_${worldId}`)
-    .on("postgres_changes",
-      { event: "INSERT", schema: "public", table: "chat_messages", filter: `world_id=eq.${worldId}` },
-      async (payload)=>{
-        const row = payload.new;
-        if (!row) return;
-        const name = await getUsernameForUserId(row.user_id) || "player";
-        addChatLine(name, row.message, row.created_at);
-      })
-    .subscribe();
+            for (let y = baseLevel - stoneDepth * 2; y <= topY; y++) { // Generate deeper to ensure no gaps
+                 const blockPosKey = `${x},${y},${z}`;
+                 if (y < baseLevel - stoneDepth) continue; // Skip very deep areas initially if needed
 
+                 let blockType = BLOCK_TYPES.STONE;
+                 if (y === topY) {
+                     blockType = BLOCK_TYPES.GRASS;
+                 } else if (y >= topY - 2) {
+                     blockType = BLOCK_TYPES.DIRT;
+                 }
+                 blocks.set(blockPosKey, blockType);
 
-  // Mobs
-  const ch4 = supabase.channel(`kidcraft_mobs_${worldId}`)
-    .on("postgres_changes",
-      { event: "*", schema: "public", table: "mobs", filter: `world_id=eq.${worldId}` },
-      (payload)=>{
-        const row = payload.new || payload.old;
-        if (!row) return;
-        if (payload.eventType === "DELETE"){
-          const mesh = mobs.get(row.id);
-          if (mesh){ scene.remove(mesh); mobs.delete(row.id); }
-          return;
+                 // Basic Tree Generation (only on the top grass block)
+                 if (blockType === BLOCK_TYPES.GRASS && y === topY && Math.random() < 0.008) { // Lower tree chance
+                     const trunkHeight = Math.floor(Math.random() * 3) + 4;
+                     // Trunk
+                     for (let ty = 1; ty <= trunkHeight; ty++) {
+                         blocks.set(`${x},${y + ty},${z}`, BLOCK_TYPES.LOG);
+                     }
+                     // Leaves (Simplified cube)
+                     const leafStartY = y + trunkHeight - 1;
+                     const leafSize = 2;
+                     for (let lx = -leafSize; lx <= leafSize; lx++) {
+                         for (let ly = 0; ly <= leafSize; ly++) {
+                             for (let lz = -leafSize; lz <= leafSize; lz++) {
+                                 if (lx === 0 && lz === 0 && ly < leafSize) continue; // Space for trunk
+                                 const leafX = x + lx;
+                                 const leafZ = z + lz;
+                                 // Ensure leaves are within the chunk boundary for simplicity,
+                                 // or handle cross-chunk trees if needed (more complex)
+                                 if (leafX >= 0 && leafX < CHUNK_SIZE && leafZ >= 0 && leafZ < CHUNK_SIZE) {
+                                      // Only place if the spot is currently empty (or replace air)
+                                      if (!blocks.has(`${leafX},${leafStartY + ly},${leafZ}`)) {
+                                          blocks.set(`${leafX},${leafStartY + ly},${leafZ}`, BLOCK_TYPES.LEAF);
+                                      }
+                                 }
+                             }
+                         }
+                     }
+                 }
+            }
         }
-        upsertMob(row);
-      })
-    .subscribe();
-
-  realtimeChannels.push(ch1, ch2, ch3, ch4);
+    }
+    return blocks;
 }
 
-// =======================
-// OFFLINE CACHING (simple localStorage)
-// =======================
-function cacheKey(world_id){ return `kidcraft_edits_${world_id}`; }
+// Creates the InstancedMeshes for a chunk based on generated data
+function createChunkMesh(chunkX, chunkZ, chunkData) {
+    const chunkGroup = new THREE.Group();
+    chunkGroup.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE); // Position the group
+    scene.add(chunkGroup);
+    worldObjects.push(chunkGroup); // Add chunk group to raycast targets
 
-function loadCachedEdits(world_id){
-  try{
-    const raw = localStorage.getItem(cacheKey(world_id));
-    if (!raw) return;
-    const obj = JSON.parse(raw);
-    for (const k in obj){
-      const { x,y,z, code } = obj[k];
-      const [cx, cz] = worldToChunk(x,z);
-      const ck = chunkKey(cx, cz);
-      const map = worldEdits.get(ck) || new Map();
-      worldEdits.set(ck, map);
-      map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
+    const instances = {}; // { [blockType]: { material: Material, positions: Vector3[] } }
+
+    // Group positions by block type
+    for (const [posKey, blockType] of chunkData.entries()) {
+        if (blockType === BLOCK_TYPES.AIR) continue; // Skip air
+
+        const [x, y, z] = posKey.split(',').map(Number);
+        const position = new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5); // Center the block visually
+
+        if (!instances[blockType]) {
+            instances[blockType] = {
+                material: materials[blockType],
+                positions: [],
+            };
+        }
+        instances[blockType].positions.push(position);
     }
-  }catch{}
+
+    const instancedMeshes = new Map(); // Map<string, THREE.InstancedMesh>
+
+    // Create InstancedMesh for each block type
+    const dummy = new THREE.Object3D(); // Used for setting matrix
+    for (const blockType in instances) {
+        const data = instances[blockType];
+        if (!data.material || data.positions.length === 0) continue;
+
+        const instancedMesh = new THREE.InstancedMesh(blockGeometry, data.material, data.positions.length);
+        instancedMesh.userData.blockType = blockType; // Store type for potential use
+        instancedMesh.userData.isChunkMesh = true; // Flag for interaction logic
+        instancedMesh.userData.chunkKey = getChunkKey(chunkX, chunkZ); // Store chunk key
+
+        let instanceIndex = 0;
+        for (const pos of data.positions) {
+            dummy.position.copy(pos);
+            dummy.updateMatrix();
+            instancedMesh.setMatrixAt(instanceIndex++, dummy.matrix);
+        }
+        instancedMesh.instanceMatrix.needsUpdate = true;
+        chunkGroup.add(instancedMesh);
+        instancedMeshes.set(blockType, instancedMesh); // Store mesh by type
+    }
+
+    return { group: chunkGroup, instancedMeshes: instancedMeshes };
 }
 
-function cacheEdit(world_id, x,y,z, code){
-  try{
-    const key = cacheKey(world_id);
-    const raw = localStorage.getItem(key);
-    const obj = raw ? JSON.parse(raw) : {};
-    obj[blockKey(x,y,z)] = { x,y,z, code };
-    // keep from exploding: cap entries
-    const keys = Object.keys(obj);
-    if (keys.length > 5000){
-      // drop oldest-ish by deleting first 500
-      for (let i=0;i<500;i++) delete obj[keys[i]];
+// --- Chunk Loading/Unloading Logic ---
+function updateChunks() {
+    const playerPos = controls.getObject().position;
+    const playerChunkX = Math.floor(playerPos.x / CHUNK_SIZE);
+    const playerChunkZ = Math.floor(playerPos.z / CHUNK_SIZE);
+
+    // Only update if player changed chunks
+    if (playerChunkX === currentChunkX && playerChunkZ === currentChunkZ) {
+        return;
     }
-    localStorage.setItem(key, JSON.stringify(obj));
-  }catch{}
+
+    const previousChunkX = currentChunkX;
+    const previousChunkZ = currentChunkZ;
+    currentChunkX = playerChunkX;
+    currentChunkZ = playerChunkZ;
+
+    const chunksToRemove = new Set();
+    chunks.forEach((_, key) => chunksToRemove.add(key)); // Mark all for potential removal
+
+    // Load/Keep chunks around player
+    for (let cx = currentChunkX - RENDER_DISTANCE; cx <= currentChunkX + RENDER_DISTANCE; cx++) {
+        for (let cz = currentChunkZ - RENDER_DISTANCE; cz <= currentChunkZ + RENDER_DISTANCE; cz++) {
+            const key = getChunkKey(cx, cz);
+            chunksToRemove.delete(key); // This chunk should stay/be loaded
+
+            if (!chunks.has(key)) {
+                // Generate data and create mesh for new chunk
+                console.log(`Loading chunk: ${key}`);
+                const chunkData = generateChunkData(cx, cz);
+                const chunkMeshInfo = createChunkMesh(cx, cz, chunkData);
+                chunks.set(key, chunkMeshInfo);
+            }
+        }
+    }
+
+    // Unload chunks that are too far
+    chunksToRemove.forEach(key => {
+        console.log(`Unloading chunk: ${key}`);
+        const chunkInfo = chunks.get(key);
+        if (chunkInfo) {
+            // Remove from scene
+            scene.remove(chunkInfo.group);
+
+            // Remove from raycast targets
+            const index = worldObjects.indexOf(chunkInfo.group);
+            if (index > -1) {
+                worldObjects.splice(index, 1);
+            }
+
+            // Dispose geometry and materials OF INSTANCED MESHES
+            chunkInfo.instancedMeshes.forEach(mesh => {
+                // Geometry is shared (blockGeometry), DO NOT dispose here
+                // Materials are potentially shared, be careful. If unique per chunk, dispose.
+                // For this setup, materials are shared, so DO NOT dispose materials here.
+                mesh.dispose(); // Dispose the InstancedMesh itself
+            });
+            chunkInfo.group.clear(); // Remove children references
+        }
+        chunks.delete(key);
+    });
+
+     // Update fog distance maybe? (Optional)
+     // scene.fog.near = RENDER_DISTANCE * CHUNK_SIZE * 0.2;
+     // scene.fog.far = RENDER_DISTANCE * CHUNK_SIZE;
+     // camera.far = RENDER_DISTANCE * CHUNK_SIZE * 1.2;
+     // camera.updateProjectionMatrix();
+
+    console.log("Loaded chunks:", chunks.size);
 }
 
-// =======================
-// LOGIN FLOW BOOTSTRAP
-// =======================
-supabase.auth.onAuthStateChange(async (_event, sess) => {
-  setSessionUserId(sess);
-  isGuest = isAnonymousSession(sess);
-  spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
-  if (sess?.user?.id){
-    setStatus("Auth OK. Creating profile...");
-    try { selfUsername = await ensurePlayerProfile(sess);
-      await refreshSelfProfile();
-      startMobTickerIfAllowed(); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
-    setStatus("Joining world...");
-    await ensureWorld();
-    if (!worldId){
-      setStatus("World missing. Run SQL setup in Supabase.");
-      return;
-    }
-    setStatus("World joined. Spawning...");
-    const sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
-    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
-    setStatus("Loading...");
-    loadCachedEdits(worldId);
-    subscribeRealtime();
-    setHint((isGuest ? "Guest is read-only. " : "") + (isMobile()
-      ? "Left: move • Right: look • Tap: break • Double-tap/Place button: place • Jump + ◀▶ hotbar buttons"
-      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
+// --- Block Interaction ---
+window.addEventListener('mousedown', (event) => {
+    if (!controls.isLocked) return;
 
-    // Hide auth panel after login
-    document.getElementById("auth").style.display = "none";
-  } else {
-    clearRealtime();
-    document.getElementById("auth").style.display = "";
-    if (chat.root) chat.root.style.display = "none";
-    if (chat.messages) chat.messages.innerHTML = "";
-  }
+    // Use camera direction for raycasting in pointer lock
+    interactionRaycaster.setFromCamera({ x: 0, y: 0 }, camera); // Center of screen
+    const intersects = interactionRaycaster.intersectObjects(worldObjects, true); // Check children (InstancedMesh within Groups)
+
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const obj = intersection.object;
+
+        // --- Breaking Blocks ---
+        if (event.button === 0) { // Left click
+            if (obj.userData.isChunkMesh && intersection.instanceId !== undefined) {
+                // Hide the instance by scaling its matrix to zero
+                const mesh = obj; // The InstancedMesh
+                const instanceId = intersection.instanceId;
+                const matrix = new THREE.Matrix4();
+                mesh.getMatrixAt(instanceId, matrix); // Get current matrix
+                matrix.scale(new THREE.Vector3(0, 0, 0)); // Scale to zero
+                mesh.setMatrixAt(instanceId, matrix); // Set updated matrix
+                mesh.instanceMatrix.needsUpdate = true; // IMPORTANT: Tell Three.js to update
+                console.log(`Hid instance ${instanceId} in chunk ${mesh.userData.chunkKey}`);
+
+                // TODO: Update underlying chunk data structure if needed for saving/persistence
+            }
+            else if (!obj.userData.isChunkMesh && obj.userData.isPlacedBlock) {
+                 // It's a manually placed block (individual Mesh)
+                 scene.remove(obj);
+                 const index = worldObjects.indexOf(obj);
+                 if(index > -1) worldObjects.splice(index, 1);
+                 // Optional: Dispose geometry/material if not shared
+                 // obj.geometry.dispose();
+                 // obj.material.dispose();
+                 console.log("Removed placed block");
+            }
+        }
+        // --- Placing Blocks ---
+        else if (event.button === 2) { // Right click
+            if (!intersection.face) return; // Need face info
+
+            const faceNormal = intersection.face.normal;
+            let placePosition = new THREE.Vector3();
+
+            if (obj.userData.isChunkMesh && intersection.instanceId !== undefined) {
+                // Get position of the hit instance
+                const hitMatrix = new THREE.Matrix4();
+                obj.getMatrixAt(intersection.instanceId, hitMatrix);
+                const hitPosition = new THREE.Vector3().setFromMatrixPosition(hitMatrix);
+                // Calculate position relative to the chunk group's origin
+                const chunkGroup = obj.parent;
+                hitPosition.add(chunkGroup.position); // Add chunk offset to get world position
+
+                placePosition.copy(hitPosition).add(faceNormal);
+
+            } else if (obj.position) { // It's likely an individual mesh (like a previously placed block)
+                placePosition.copy(obj.position).add(faceNormal);
+            } else {
+                return; // Cannot determine placement position
+            }
+
+            // Round to nearest block center
+            placePosition.floor().addScalar(0.5);
+
+            // --- Collision Check: Prevent placing block inside player ---
+            const playerPos = controls.getObject().position;
+            const playerFeetVoxelCenter = playerPos.clone().floor().addScalar(0.5);
+            const playerHeadVoxelCenter = playerPos.clone().setY(playerPos.y + 1).floor().addScalar(0.5);
+
+            if (placePosition.distanceTo(playerFeetVoxelCenter) < 0.1 ||
+                placePosition.distanceTo(playerHeadVoxelCenter) < 0.1) {
+                console.log("Cannot place block inside player.");
+                return;
+            }
+
+            // --- Add the new block as an INDIVIDUAL MESH ---
+            // This avoids the complexity of modifying InstancedMesh for now.
+            const blockMaterial = Array.isArray(materials[selectedBlockType])
+                ? materials[selectedBlockType] // Use array for grass
+                : materials[selectedBlockType].clone(); // Clone simple materials if needed? Maybe not necessary if not modified.
+
+            const newBlock = new THREE.Mesh(blockGeometry, blockMaterial);
+            newBlock.position.copy(placePosition);
+            newBlock.userData.blockType = selectedBlockType;
+            newBlock.userData.isPlacedBlock = true; // Mark as manually placed
+            scene.add(newBlock);
+            worldObjects.push(newBlock); // Add to raycast targets
+            console.log(`Placed ${selectedBlockType} block at ${placePosition.x}, ${placePosition.y}, ${placePosition.z}`);
+        }
+    }
 });
 
-// =======================
-// SIMPLE PHYSICS
-// =======================
-function groundHeightAt(x,z){
-  // approximate: the terrain height at this position + 1.7 camera height offset handled separately
-  return terrainHeight(Math.floor(x), Math.floor(z)) + 1.0;
+
+// --- Animation Loop ---
+const clock = new THREE.Clock();
+let fpsLastUpdateTime = 0;
+let frameCount = 0;
+const fpsDisplayElement = document.getElementById('fps-display'); // Needs HTML element
+
+function animate() {
+    requestAnimationFrame(animate);
+    const delta = clock.getDelta();
+    const elapsedTime = clock.getElapsedTime();
+
+    // --- FPS Calculation ---
+    frameCount++;
+    if (elapsedTime - fpsLastUpdateTime >= 1.0) {
+        const fps = Math.round(frameCount / (elapsedTime - fpsLastUpdateTime));
+        if(fpsDisplayElement) fpsDisplayElement.textContent = `FPS: ${fps}`;
+        frameCount = 0;
+        fpsLastUpdateTime = elapsedTime;
+    }
+
+    // --- Update Chunks ---
+    updateChunks(); // Load/unload chunks based on player position
+
+    // --- Player Movement & Physics ---
+    if (controls.isLocked) {
+        const moveSpeedActual = MOVE_SPEED * delta * 60; // Frame-rate independent speed
+        const playerObject = controls.getObject();
+
+        // Horizontal movement
+        if (keys.w) playerObject.translateZ(-moveSpeedActual);
+        if (keys.s) playerObject.translateZ(moveSpeedActual);
+        if (keys.a) playerObject.translateX(-moveSpeedActual);
+        if (keys.d) playerObject.translateX(moveSpeedActual);
+
+        // Vertical movement (Gravity)
+        const playerPosition = playerObject.position;
+
+        // Apply gravity
+        playerVelocityY -= GRAVITY * delta * 60;
+
+        // Check for ground collision
+        groundCheckRaycaster.set(playerPosition, downVector);
+        const groundIntersects = groundCheckRaycaster.intersectObjects(worldObjects, true); // Check all world objects
+        const onSolidGround = groundIntersects.length > 0 && groundIntersects[0].distance <= PLAYER_HEIGHT + 0.01; // Small buffer
+
+        if (onSolidGround) {
+            // Snap to ground if falling onto it
+            if (playerVelocityY <= 0) {
+                 playerVelocityY = 0;
+                 // Adjust position precisely to avoid sinking/floating slightly
+                 playerPosition.y = groundIntersects[0].point.y + PLAYER_HEIGHT;
+                 onGround = true;
+            }
+        } else {
+             onGround = false; // Not on ground if raycast doesn't hit or hit is too far
+        }
+
+        // Apply vertical velocity
+        playerPosition.y += playerVelocityY * delta * 60;
+
+        // Prevent falling through world (safety net)
+        if (playerPosition.y < baseLevel - stoneDepth * 3) {
+            playerPosition.set(currentChunkX * CHUNK_SIZE + CHUNK_SIZE/2, baseLevel + noiseAmplitude + 5, currentChunkZ * CHUNK_SIZE + CHUNK_SIZE/2);
+            playerVelocityY = 0;
+        }
+    }
+
+    // --- Render ---
+    renderer.render(scene, camera);
 }
 
-// =======================
-// ANIMATION LOOP
-// =======================
-let lastT = performance.now();
-function animate(){
-  requestAnimationFrame(animate);
-  const now = performance.now();
-  const dt = Math.min(0.05, (now-lastT)/1000);
-  lastT = now;
+// --- Initial Setup ---
+updateSelectedBlockUI();
+// Initial chunk load around starting position (optional, updateChunks will handle it)
+// const startChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
+// const startChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+// currentChunkX = startChunkX + 1; // Force initial load
+// currentChunkZ = startChunkZ + 1;
+updateChunks(); // Perform initial chunk load based on camera start
 
-  // Movement input
-  let forwardInput = (keys.w ? 1 : 0) + (keys.s ? -1 : 0) + touchMoveForward;
-  let strafeInput  = (keys.d ? 1 : 0) + (keys.a ? -1 : 0) + touchMoveStrafe;
-  const len = Math.hypot(forwardInput, strafeInput);
-  if (len > 1){ forwardInput/=len; strafeInput/=len; }
-
-  const moveSpeed = player.speed * dt;
-  if (forwardInput) controls.object.translateZ(-moveSpeed * forwardInput);
-  if (strafeInput)  controls.object.translateX(moveSpeed * strafeInput);
-
-  // Gravity + ground
-  const pos = controls.object.position;
-  const gh = groundHeightAt(pos.x, pos.z);
-  const desiredY = gh + 1.0; // player eye-ish
-  player.velocityY -= 25 * dt;
-  pos.y += player.velocityY * dt;
-
-  if (pos.y < desiredY){
-    pos.y = desiredY;
-    player.velocityY = 0;
-    player.grounded = true;
-  } else {
-    player.grounded = false;
-  }
-
-  // Jump (space or mobile button)
-  if (keys[" "]){
-    attemptJump();
-  }
-
-  // Chunk streaming
-  streamChunksAround(pos.x, pos.z);
-
-  // Multiplayer state push
-  pushPlayerState();
-
-  camera.rotation.z = 0;
-  controls.object.rotation.z = 0;
-  renderer.render(scene, camera);
-}
+console.log("Starting animation loop...");
 animate();
 
-addEventListener("resize", ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// Helpful debug if Supabase keys are unset
-if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
-  setStatus("Set SUPABASE_URL and SUPABASE_ANON_KEY in main.js");
-}
-
-
-function getSelectedWorldSlug(){
-  const sel = document.getElementById('world-select');
-  const slug = (sel?.value || worldSlug || 'overworld');
-  worldSlug = slug;
-  localStorage.setItem('kidcraft_world', slug);
-  return slug;
-}
-
-
-async function refreshSelfProfile(){
-  if (!userId()) return;
-  const { data, error } = await supabase
-    .from("player_profiles")
-    .select("username, role, muted_until")
-    .eq("user_id", userId())
-    .maybeSingle();
-  if (error) return;
-  if (data?.username) selfUsername = data.username;
-  if (data?.role) selfRole = data.role;
-  mutedUntil = data?.muted_until || null;
-}
-function isMutedNow(){
-  if (!mutedUntil) return false;
-  const t = new Date(mutedUntil).getTime();
-  return Date.now() < t;
-}
-function roleRank(r){
-  return r === 'admin' ? 2 : (r === 'mod' ? 1 : 0);
-}
-
-
-/********************
- * CRAFTING (RPC)
- ********************/
-const craftingUI = {
-  toggle: document.getElementById("crafting-toggle"),
-  panel: document.getElementById("crafting"),
-  close: document.getElementById("crafting-close"),
-  list: document.getElementById("crafting-list"),
-};
-
-function setCraftingVisible(v){
-  if (!craftingUI.panel) return;
-  craftingUI.panel.style.display = v ? "" : "none";
-}
-if (craftingUI.toggle) craftingUI.toggle.addEventListener("click", ()=>{
-  const open = craftingUI.panel && craftingUI.panel.style.display !== "none";
-  setCraftingVisible(!open);
-});
-if (craftingUI.close) craftingUI.close.addEventListener("click", ()=> setCraftingVisible(false));
-
-async function loadRecipes(){
-  if (!craftingUI.list) return;
-  // Fetch recipes + ingredients (simple, small)
-  const { data, error } = await supabase
-    .from("recipes")
-    .select("code, name, output_material_code, output_qty, ingredients:recipe_ingredients(material_code, qty)")
-    .order("name", { ascending: true })
-    .limit(200);
-  if (error) { craftingUI.list.innerHTML = `<div>Recipes unavailable: ${escapeHtml(error.message)}</div>`; return; }
-
-  craftingUI.list.innerHTML = "";
-  for (const r of (data||[])){
-    const div = document.createElement("div");
-    div.className = "recipe";
-    const ings = (r.ingredients||[]).map(i => `${i.material_code}×${i.qty}`).join(", ");
-    div.innerHTML = `
-      <div class="recipe-head">
-        <div>
-          <div class="recipe-name">${escapeHtml(r.name)}</div>
-          <div class="recipe-ings">${escapeHtml(ings || "")}</div>
-        </div>
-        <button data-recipe="${escapeHtml(r.code)}">Craft</button>
-      </div>`;
-    div.querySelector("button").addEventListener("click", async ()=>{
-      if (!userId()) return;
-      const { data, error } = await supabase.rpc("rpc_craft", { recipe_code: r.code, craft_qty: 1, in_world_id: worldId });
-      if (error) return setHint("Craft failed: " + error.message);
-      setHint(data?.message || "Crafted!");
-    });
-    craftingUI.list.appendChild(div);
-  }
-}
-
-
-/********************
- * MOBS (server-ticked, low frequency)
- ********************/
-const mobs = new Map(); // mob_id -> mesh
-function mobMesh(type){
-  const geom = new THREE.BoxGeometry(0.9,0.9,0.9);
-  const mat = new THREE.MeshStandardMaterial({ color: type === "slime" ? 0x44ff66 : 0x66ccff });
-  const m = new THREE.Mesh(geom, mat);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
-}
-function upsertMob(row){
-  let mesh = mobs.get(row.id);
-  if (!mesh){
-    mesh = mobMesh(row.type);
-    scene.add(mesh);
-    mobs.set(row.id, mesh);
-  }
-  mesh.position.set(row.x, row.y, row.z);
-  mesh.rotation.y = row.yaw || 0;
-}
-async function loadMobs(){
-  if (!worldId) return;
-  // ensure baseline mobs exist
-  await supabase.rpc("rpc_ensure_mobs", { in_world_id: worldId });
-  const { data, error } = await supabase.from("mobs")
-    .select("id, world_id, type, x,y,z,yaw,hp, updated_at")
-    .eq("world_id", worldId)
-    .limit(200);
-  if (error) return;
-  for (const row of (data||[])) upsertMob(row);
-}
-let mobTickTimer = null;
-function startMobTickerIfAllowed(){
-  if (mobTickTimer) clearInterval(mobTickTimer);
-  mobTickTimer = null;
-  // Only mods/admins, non-guest, to avoid multiple tickers on free tier.
-  if (isGuest) return;
-  if (roleRank(selfRole) < 1) return;
-  mobTickTimer = setInterval(async ()=>{
-    if (!worldId) return;
-    await supabase.rpc("rpc_mob_tick", { in_world_id: worldId });
-  }, 1000);
-}
-
-// Pointer lock errors can happen if user cancels quickly; avoid noisy console.
-document.addEventListener("pointerlockerror", () => {
-  if (!isMobile()) setHint("Click to lock mouse. (If it fails, try clicking again.)");
+// Handle window resize
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
 });
