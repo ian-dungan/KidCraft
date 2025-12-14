@@ -660,22 +660,344 @@ create table if not exists public.chat_messages (
 create index if not exists chat_messages_world_created_idx
   on public.chat_messages (world_id, created_at);
 
-alter table public.chat_messages enable row level security;
+-- =====================================================================
+-- KidCraft: Canonical RLS Policies (Idempotent)
+-- This section DROPS and RE-CREATES policies to match KidCraft rules:
+-- - Everyone signed-in (including anonymous sign-ins) can READ shared data
+-- - Users can only write rows that belong to themselves (auth.uid() = user_id)
+-- - Guests (provider=anonymous) are READ-ONLY for block edits (world_blocks + block_updates)
+-- - Event logs are INSERT-only (no UPDATE/DELETE policies)
+-- =====================================================================
 
--- Everyone signed-in (including anonymous users) can read chat in a world.
+-- Helper predicate: true if this session is NOT an anonymous (guest) sign-in.
+-- Supabase anonymous sign-ins typically have app_metadata.provider = 'anonymous'.
+-- If the claim isn't present, we treat it as non-guest.
+create or replace function public.is_non_guest()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(auth.jwt() -> 'app_metadata' ->> 'provider', '') <> 'anonymous';
+$$;
+
+-- Helper: protect spawn region (0,0) with radius 10 (optional backstop).
+create or replace function public.in_spawn_protection(x integer, z integer)
+returns boolean
+language sql
+immutable
+as $$
+  select ((x - 0)*(x - 0) + (z - 0)*(z - 0)) <= (10*10);
+$$;
+
+-- ---------------------------
+-- Enable RLS (safety)
+-- ---------------------------
+alter table if exists public.block_updates      enable row level security;
+alter table if exists public.world_blocks       enable row level security;
+alter table if exists public.player_state       enable row level security;
+alter table if exists public.player_profiles    enable row level security;
+alter table if exists public.player_inventories enable row level security;
+alter table if exists public.inventory_slots    enable row level security;
+alter table if exists public.player_stats       enable row level security;
+alter table if exists public.materials          enable row level security;
+alter table if exists public.worlds             enable row level security;
+alter table if exists public.chat_messages      enable row level security;
+
+-- ---------------------------
+-- Drop existing policies (idempotent)
+-- ---------------------------
+do $$ begin
+  -- block_updates
+  execute 'drop policy if exists "Block Updates Insert Own" on public.block_updates';
+  execute 'drop policy if exists "Block Updates Select Auth" on public.block_updates';
+
+  -- world_blocks
+  execute 'drop policy if exists "World Blocks Mutate Auth" on public.world_blocks';
+  execute 'drop policy if exists "World Blocks Select Auth" on public.world_blocks';
+
+  -- player_state
+  execute 'drop policy if exists "State Insert Own" on public.player_state';
+  execute 'drop policy if exists "State Select Auth" on public.player_state';
+  execute 'drop policy if exists "State Update Own" on public.player_state';
+
+  -- player_profiles
+  execute 'drop policy if exists "Profiles Insert Own" on public.player_profiles';
+  execute 'drop policy if exists "Profiles Select Own" on public.player_profiles';
+  execute 'drop policy if exists "Profiles Update Own" on public.player_profiles';
+
+  -- player_inventories
+  execute 'drop policy if exists "Inv Delete Own" on public.player_inventories';
+  execute 'drop policy if exists "Inv Insert Own" on public.player_inventories';
+  execute 'drop policy if exists "Inv Select Own" on public.player_inventories';
+  execute 'drop policy if exists "Inv Update Own" on public.player_inventories';
+
+  -- inventory_slots / player_stats
+  execute 'drop policy if exists "Slots Own" on public.inventory_slots';
+  execute 'drop policy if exists "Stats Own" on public.player_stats';
+
+  -- materials / worlds
+  execute 'drop policy if exists "Materials Select Auth" on public.materials';
+  execute 'drop policy if exists "Worlds Select Auth" on public.worlds';
+
+  -- chat_messages (if present)
+  execute 'drop policy if exists "chat_select_world" on public.chat_messages';
+  execute 'drop policy if exists "chat_insert_self" on public.chat_messages';
+exception when undefined_table then
+  -- chat_messages might not exist in older schema; ignore.
+  null;
+end $$;
+
+-- ---------------------------
+-- materials (read-only)
+-- ---------------------------
+create policy "Materials Select Auth"
+on public.materials
+for select
+to authenticated
+using (true);
+
+-- ---------------------------
+-- worlds (read-only list)
+-- ---------------------------
+create policy "Worlds Select Auth"
+on public.worlds
+for select
+to authenticated
+using (true);
+
+-- ---------------------------
+-- player_profiles (self-owned)
+-- ---------------------------
+create policy "Profiles Select Own"
+on public.player_profiles
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+create policy "Profiles Insert Own"
+on public.player_profiles
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+create policy "Profiles Update Own"
+on public.player_profiles
+for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+-- ---------------------------
+-- player_state (self write, everyone can read)
+-- ---------------------------
+create policy "State Select Auth"
+on public.player_state
+for select
+to authenticated
+using (true);
+
+create policy "State Insert Own"
+on public.player_state
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+create policy "State Update Own"
+on public.player_state
+for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+-- ---------------------------
+-- block_updates (event log)
+-- Guests are READ-ONLY (no inserts) to match client rules.
+-- ---------------------------
+create policy "Block Updates Select Auth"
+on public.block_updates
+for select
+to authenticated
+using (true);
+
+create policy "Block Updates Insert Own"
+on public.block_updates
+for insert
+to authenticated
+with check (
+  auth.uid() = user_id
+  and public.is_non_guest()
+  -- optional backstop: disallow edits in spawn region by DB, too
+  and not public.in_spawn_protection(x, z)
+);
+
+-- NOTE: intentionally NO update/delete policies on block_updates.
+
+-- ---------------------------
+-- world_blocks (authoritative persistence)
+-- Guests are READ-ONLY.
+-- We allow INSERT/UPDATE for non-guest authenticated users only.
+-- ---------------------------
+create policy "World Blocks Select Auth"
+on public.world_blocks
+for select
+to authenticated
+using (true);
+
+create policy "World Blocks Insert NonGuest"
+on public.world_blocks
+for insert
+to authenticated
+with check (
+  public.is_non_guest()
+  and not public.in_spawn_protection(x, z)
+);
+
+create policy "World Blocks Update NonGuest"
+on public.world_blocks
+for update
+to authenticated
+using (public.is_non_guest())
+with check (
+  public.is_non_guest()
+  and not public.in_spawn_protection(x, z)
+);
+
+-- NOTE: intentionally NO delete policy on world_blocks (prevents grief wipes).
+
+-- ---------------------------
+-- player_inventories (self-owned)
+-- ---------------------------
+create policy "Inv Select Own"
+on public.player_inventories
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+create policy "Inv Insert Own"
+on public.player_inventories
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+create policy "Inv Update Own"
+on public.player_inventories
+for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+create policy "Inv Delete Own"
+on public.player_inventories
+for delete
+to authenticated
+using (auth.uid() = user_id);
+
+-- ---------------------------
+-- inventory_slots (self-owned via inventory -> user_id)
+-- Assumes inventory_slots has inventory_id referencing player_inventories(id)
+-- ---------------------------
+create policy "Slots Own"
+on public.inventory_slots
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.player_inventories i
+    where i.id = inventory_slots.inventory_id
+      and i.user_id = auth.uid()
+  )
+);
+
+create policy "Slots Insert Own"
+on public.inventory_slots
+for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.player_inventories i
+    where i.id = inventory_slots.inventory_id
+      and i.user_id = auth.uid()
+  )
+);
+
+create policy "Slots Update Own"
+on public.inventory_slots
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.player_inventories i
+    where i.id = inventory_slots.inventory_id
+      and i.user_id = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.player_inventories i
+    where i.id = inventory_slots.inventory_id
+      and i.user_id = auth.uid()
+  )
+);
+
+create policy "Slots Delete Own"
+on public.inventory_slots
+for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.player_inventories i
+    where i.id = inventory_slots.inventory_id
+      and i.user_id = auth.uid()
+  )
+);
+
+-- ---------------------------
+-- player_stats (self-owned)
+-- ---------------------------
+create policy "Stats Select Own"
+on public.player_stats
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+create policy "Stats Insert Own"
+on public.player_stats
+for insert
+to authenticated
+with check (auth.uid() = user_id);
+
+create policy "Stats Update Own"
+on public.player_stats
+for update
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+create policy "Stats Delete Own"
+on public.player_stats
+for delete
+to authenticated
+using (auth.uid() = user_id);
+
+-- ---------------------------
+-- chat_messages (if table exists)
+-- Everyone authenticated (including guests) can read + send as themselves.
+-- ---------------------------
 do $$ begin
   create policy "chat_select_world"
-  on public.chat_messages for select
+  on public.chat_messages
+  for select
   to authenticated
   using (true);
 exception when duplicate_object then null; end $$;
 
--- Everyone signed-in (including anonymous users) can send chat as themselves.
 do $$ begin
   create policy "chat_insert_self"
-  on public.chat_messages for insert
+  on public.chat_messages
+  for insert
   to authenticated
   with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
 
--- Optional: allow users to delete their own messages (disabled by default)
+-- NOTE: If you want guests read-only for chat too, add `and public.is_non_guest()`
+-- to chat_insert_self.
