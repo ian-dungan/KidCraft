@@ -94,6 +94,13 @@ const ui = {
   gyro: document.getElementById("gyro"),
   hotbar: document.getElementById("hotbar"),
   hint: document.getElementById("hint"),
+  mobileActions: document.getElementById("mobile-actions"),
+  mobileBreak: document.getElementById("mobile-break"),
+  mobilePlace: document.getElementById("mobile-place"),
+  mobileJump: document.getElementById("mobile-jump"),
+  hotbarPrev: document.getElementById("hotbar-prev"),
+  hotbarNext: document.getElementById("hotbar-next"),
+  hotbarLabel: document.getElementById("hotbar-label"),
 };
 
 ui.guest.style.display = ENABLE_GUEST_BUTTON ? "" : "none";
@@ -210,6 +217,7 @@ function renderHotbar(){
     slot.textContent = b ? b.name : "";
     ui.hotbar.appendChild(slot);
   }
+  updateHotbarLabel();
 }
 renderHotbar();
 
@@ -217,6 +225,17 @@ addEventListener("keydown", (e)=>{
   const n = parseInt(e.key,10);
   if (n>=1 && n<=9){ hotbarIndex = n-1; renderHotbar(); }
 });
+
+function updateHotbarLabel(){
+  if (!ui.hotbarLabel) return;
+  const b = BLOCKS[hotbarIndex % BLOCKS.length];
+  ui.hotbarLabel.textContent = b ? b.name : "";
+}
+
+function changeHotbar(delta){
+  hotbarIndex = (hotbarIndex + delta + 9) % 9;
+  renderHotbar();
+}
 
 // =======================
 // INPUT (PC + MOBILE)
@@ -320,6 +339,23 @@ function setupTouchZones(){
 }
 setupTouchZones();
 
+function setupMobileButtons(){
+  const updateVisibility = ()=>{
+    if (ui.mobileActions) ui.mobileActions.hidden = !isMobile();
+  };
+  updateVisibility();
+  addEventListener("resize", updateVisibility);
+
+  const intercept = (e)=>{ e.preventDefault(); e.stopPropagation(); };
+
+  ui.mobileBreak?.addEventListener("click", async (e)=>{ intercept(e); await breakSelectedBlock(); });
+  ui.mobilePlace?.addEventListener("click", async (e)=>{ intercept(e); await placeSelectedBlock(); });
+  ui.mobileJump?.addEventListener("click", (e)=>{ intercept(e); attemptJump(); });
+  ui.hotbarPrev?.addEventListener("click", (e)=>{ intercept(e); changeHotbar(-1); });
+  ui.hotbarNext?.addEventListener("click", (e)=>{ intercept(e); changeHotbar(1); });
+}
+setupMobileButtons();
+
 // Gyro aiming (optional)
 let gyroEnabled = false;
 let lastAlpha = null, lastBeta = null;
@@ -364,6 +400,13 @@ const player = {
 };
 controls.object.position.set(0, 20, 0);
 camera.rotation.x = 0;
+
+function attemptJump(){
+  if (!player.grounded) return false;
+  player.velocityY = player.jump;
+  player.grounded = false;
+  return true;
+}
 
 const raycaster = new THREE.Raycaster();
 const tempVec = new THREE.Vector3();
@@ -497,6 +540,28 @@ function getSelectedBlockCode(){
   return BLOCKS[hotbarIndex % BLOCKS.length].code;
 }
 
+async function breakSelectedBlock(){
+  const hit = raycastBlock();
+  if (!hit) return false;
+  const { x,y,z } = hit.object.userData;
+  if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return false; }
+  applyEditLocal(worldId, x,y,z, "air");
+  if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
+  return true;
+}
+
+async function placeSelectedBlock(){
+  const hit = raycastBlock();
+  if (!hit) return false;
+  const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
+  const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+  const code = getSelectedBlockCode();
+  if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return false; }
+  applyEditLocal(worldId, x,y,z, code);
+  if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
+  return true;
+}
+
 // Right-click / tap to place, left-click to break (desktop)
 // On mobile: use two-finger tap to place, one-finger tap to break (simple)
 let lastTapTime = 0;
@@ -538,21 +603,9 @@ window.addEventListener("contextmenu", e=>e.preventDefault());
 window.addEventListener("mousedown", async (e)=>{
   if (isMobile()) return;
   if (e.button === 0){ // break
-    const hit = raycastBlock();
-    if (!hit) return;
-    const { x,y,z } = hit.object.userData;
-    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
-    applyEditLocal(worldId, x,y,z, "air");
-    if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
+    await breakSelectedBlock();
   } else if (e.button === 2){ // place
-    const hit = raycastBlock();
-    if (!hit) return;
-    const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
-    const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-    const code = getSelectedBlockCode();
-    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
-    applyEditLocal(worldId, x,y,z, code);
-    if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
+    await placeSelectedBlock();
   }
 });
 
@@ -568,19 +621,9 @@ window.addEventListener("touchend", async (e)=>{
   if (!hit) return;
 
   if (doubleTap || twoFinger){
-    // place adjacent
-    const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
-    const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-    const code = getSelectedBlockCode();
-    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
-    applyEditLocal(worldId, x,y,z, code);
-    if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
+    await placeSelectedBlock();
   } else {
-    // break
-    const { x,y,z } = hit.object.userData;
-    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
-    applyEditLocal(worldId, x,y,z, "air");
-    if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
+    await breakSelectedBlock();
   }
 }, { passive: true });
 
@@ -982,7 +1025,7 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     loadCachedEdits(worldId);
     subscribeRealtime();
     setHint((isGuest ? "Guest is read-only. " : "") + (isMobile()
-      ? "Left: move • Right: look • Tap: break • Double-tap: place"
+      ? "Left: move • Right: look • Tap: break • Double-tap/Place button: place • Jump + ◀▶ hotbar buttons"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
 
     // Hide auth panel after login
@@ -1038,10 +1081,9 @@ function animate(){
     player.grounded = false;
   }
 
-  // Jump (space or mobile "quick upward swipe" not implemented)
-  if (keys[" "] && player.grounded){
-    player.velocityY = player.jump;
-    player.grounded = false;
+  // Jump (space or mobile button)
+  if (keys[" "]){
+    attemptJump();
   }
 
   // Chunk streaming
