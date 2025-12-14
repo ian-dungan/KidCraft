@@ -156,7 +156,8 @@ insert into public.materials (code, display_name, category, hardness, tool_tag, 
 ('packed_ice','Packed Ice','block',0.5,null,ARRAY['transparent']),
 ('blue_ice','Blue Ice','block',0.5,null,ARRAY['transparent']),
 ('water','Water','block',100.0,null,ARRAY['fluid']),
-('lava','Lava','block',100.0,null,ARRAY['fluid','hot']);
+('lava','Lava','block',100.0,null,ARRAY['fluid','hot'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Wood families (overworld woods + bamboo + cherry + mangrove) ----------
 insert into public.materials (code, display_name, category, hardness, tool_tag, tags)
@@ -191,7 +192,8 @@ values
 ('acacia_leaves','Acacia Leaves','block',0.2,null,ARRAY['leaf','transparent']),
 ('dark_oak_leaves','Dark Oak Leaves','block',0.2,null,ARRAY['leaf','transparent']),
 ('mangrove_leaves','Mangrove Leaves','block',0.2,null,ARRAY['leaf','transparent']),
-('cherry_leaves','Cherry Leaves','block',0.2,null,ARRAY['leaf','transparent']);
+('cherry_leaves','Cherry Leaves','block',0.2,null,ARRAY['leaf','transparent'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Stone / Deepslate families ----------
 insert into public.materials (code, display_name, category, hardness, tool_tag, tags)
@@ -205,7 +207,8 @@ values
 ('deepslate','Deepslate','block',3.0,'pickaxe',ARRAY['solid','natural']),
 ('cobbled_deepslate','Cobbled Deepslate','block',3.5,'pickaxe',ARRAY['solid']),
 ('deepslate_bricks','Deepslate Bricks','block',3.5,'pickaxe',ARRAY['solid']),
-('polished_deepslate','Polished Deepslate','block',3.5,'pickaxe',ARRAY['solid']);
+('polished_deepslate','Polished Deepslate','block',3.5,'pickaxe',ARRAY['solid'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Ores (stone & deepslate) ----------
 insert into public.materials (code, display_name, category, hardness, tool_tag, tags)
@@ -225,7 +228,8 @@ values
 ('deepslate_lapis_ore','Deepslate Lapis Ore','block',4.5,'pickaxe',ARRAY['solid','ore']),
 ('deepslate_redstone_ore','Deepslate Redstone Ore','block',4.5,'pickaxe',ARRAY['solid','ore']),
 ('deepslate_diamond_ore','Deepslate Diamond Ore','block',4.5,'pickaxe',ARRAY['solid','ore']),
-('deepslate_emerald_ore','Deepslate Emerald Ore','block',4.5,'pickaxe',ARRAY['solid','ore']);
+('deepslate_emerald_ore','Deepslate Emerald Ore','block',4.5,'pickaxe',ARRAY['solid','ore'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Utility blocks (crafting, storage, redstone basics) ----------
 insert into public.materials (code, display_name, category, hardness, tool_tag, tags)
@@ -253,7 +257,8 @@ values
 ('oak_pressure_plate','Oak Pressure Plate','block',0.5,'axe',ARRAY['redstone']),
 ('redstone_torch','Redstone Torch','block',0.0,null,ARRAY['redstone','light']),
 ('redstone_lamp','Redstone Lamp','block',0.3,'pickaxe',ARRAY['redstone','light']),
-('noteblock','Note Block','block',0.8,'axe',ARRAY['redstone']);
+('noteblock','Note Block','block',0.8,'axe',ARRAY['redstone'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Glass & lighting ----------
 insert into public.materials (code, display_name, category, hardness, tool_tag, tags)
@@ -262,7 +267,8 @@ values
 ('glass_pane','Glass Pane','block',0.3,null,ARRAY['transparent']),
 ('sea_lantern','Sea Lantern','block',0.3,'pickaxe',ARRAY['light']),
 ('glowstone','Glowstone','block',0.3,'pickaxe',ARRAY['light']),
-('jack_o_lantern','Jack o''Lantern','block',1.0,'axe',ARRAY['light']);
+('jack_o_lantern','Jack o''Lantern','block',1.0,'axe',ARRAY['light'])
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Color variants via SQL templates ----------
 with colors(name, code) as (
@@ -354,7 +360,8 @@ values
 ('potato','Potato','item',0,null,ARRAY['food'],jsonb_build_object('hunger',1)),
 ('baked_potato','Baked Potato','item',0,null,ARRAY['food'],jsonb_build_object('hunger',5)),
 ('melon_slice','Melon Slice','item',0,null,ARRAY['food'],jsonb_build_object('hunger',2)),
-('pumpkin_pie','Pumpkin Pie','item',0,null,ARRAY['food'],jsonb_build_object('hunger',8));
+('pumpkin_pie','Pumpkin Pie','item',0,null,ARRAY['food'],jsonb_build_object('hunger',8))
+ON CONFLICT (code) DO NOTHING;
 
 -- ---------- Tools, weapons, armor families ----------
 with tiers as (
@@ -469,7 +476,8 @@ values
 ('sheep','Sheep','entity',0,null,ARRAY['living','passive']),
 ('chicken','Chicken','entity',0,null,ARRAY['living','passive']),
 ('villager','Villager','entity',0,null,ARRAY['living','neutral']),
-('iron_golem','Iron Golem','entity',0,null,ARRAY['living','neutral']);
+('iron_golem','Iron Golem','entity',0,null,ARRAY['living','neutral'])
+ON CONFLICT (code) DO NOTHING;
 
 -- =========================================================
 -- ROW LEVEL SECURITY & POLICIES
