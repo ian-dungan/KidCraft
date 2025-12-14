@@ -495,14 +495,16 @@ alter table public.block_updates     enable row level security;
 
 -- Worlds readable by any authenticated user
 drop policy if exists "Worlds Select Auth" on public.worlds;
-    create policy "Worlds Select Auth"
+    DROP POLICY IF EXISTS "Worlds Select Auth" ON public.worlds;
+create policy "Worlds Select Auth"
 on public.worlds
 for select
 using (auth.role() = 'authenticated');
 
 -- Materials read-only to authenticated users
 drop policy if exists "Materials Select Auth" on public.materials;
-    create policy "Materials Select Auth"
+    DROP POLICY IF EXISTS "Materials Select Auth" ON public.materials;
+create policy "Materials Select Auth"
 on public.materials
 for select
 using (auth.role() = 'authenticated');
@@ -511,13 +513,15 @@ using (auth.role() = 'authenticated');
 drop policy if exists "Profiles Select Own" on public.player_profiles;
 
 drop policy if exists "Profiles Insert Own" on public.player_profiles;
-    create policy "Profiles Insert Own"
+    DROP POLICY IF EXISTS "Profiles Insert Own" ON public.player_profiles;
+create policy "Profiles Insert Own"
 on public.player_profiles
 for insert
 with check (user_id = auth.uid());
 
 drop policy if exists "Profiles Update Own" on public.player_profiles;
-    create policy "Profiles Update Own"
+    DROP POLICY IF EXISTS "Profiles Update Own" ON public.player_profiles;
+create policy "Profiles Update Own"
 on public.player_profiles
 for update
 using (user_id = auth.uid())
@@ -525,19 +529,22 @@ with check (user_id = auth.uid());
 
 -- Player state
 drop policy if exists "State Select Auth" on public.player_state;
-    create policy "State Select Auth"
+    DROP POLICY IF EXISTS "State Select Auth" ON public.player_state;
+create policy "State Select Auth"
 on public.player_state
 for select
 using (auth.role() = 'authenticated');
 
 drop policy if exists "State Insert Own" on public.player_state;
-    create policy "State Insert Own"
+    DROP POLICY IF EXISTS "State Insert Own" ON public.player_state;
+create policy "State Insert Own"
 on public.player_state
 for insert
 with check (user_id = auth.uid());
 
 drop policy if exists "State Update Own" on public.player_state;
-    create policy "State Update Own"
+    DROP POLICY IF EXISTS "State Update Own" ON public.player_state;
+create policy "State Update Own"
 on public.player_state
 for update
 using (user_id = auth.uid())
@@ -545,18 +552,21 @@ with check (user_id = auth.uid());
 
 -- Player inventories
 drop policy if exists "Inv Select Own" on public.player_inventories;
+DROP POLICY IF EXISTS "Inv Select Own" ON public.player_inventories;
 create policy "Inv Select Own"
   on public.player_inventories
   for select
   using (user_id = auth.uid());
 
 drop policy if exists "Inv Insert Own" on public.player_inventories;
+DROP POLICY IF EXISTS "Inv Insert Own" ON public.player_inventories;
 create policy "Inv Insert Own"
   on public.player_inventories
   for insert
   with check (user_id = auth.uid());
 
 drop policy if exists "Inv Update Own" on public.player_inventories;
+DROP POLICY IF EXISTS "Inv Update Own" ON public.player_inventories;
 create policy "Inv Update Own"
   on public.player_inventories
   for update
@@ -564,6 +574,7 @@ create policy "Inv Update Own"
   with check (user_id = auth.uid());
 
 drop policy if exists "Inv Delete Own" on public.player_inventories;
+DROP POLICY IF EXISTS "Inv Delete Own" ON public.player_inventories;
 create policy "Inv Delete Own"
   on public.player_inventories
   for delete
@@ -571,7 +582,8 @@ create policy "Inv Delete Own"
 
 -- Inventory slots follow inventory ownership
 drop policy if exists "Slots Own" on public.inventory_slots;
-    create policy "Slots Own"
+    DROP POLICY IF EXISTS "Slots Own" ON public.inventory_slots;
+create policy "Slots Own"
 on public.inventory_slots
 for all
 using (
@@ -591,6 +603,7 @@ with check (
 
 -- Player stats
 drop policy if exists "Stats Own" on public.player_stats;
+DROP POLICY IF EXISTS "Stats Own" ON public.player_stats;
 create policy "Stats Own"
   on public.player_stats
   for all
@@ -599,12 +612,14 @@ create policy "Stats Own"
 
 -- World blocks
 drop policy if exists "World Blocks Select Auth" on public.world_blocks;
-    create policy "World Blocks Select Auth"
+    DROP POLICY IF EXISTS "World Blocks Select Auth" ON public.world_blocks;
+create policy "World Blocks Select Auth"
 on public.world_blocks
 for select
 using (auth.role() = 'authenticated');
 
 drop policy if exists "World Blocks Mutate Auth" on public.world_blocks;
+DROP POLICY IF EXISTS "World Blocks Mutate Auth" ON public.world_blocks;
 create policy "World Blocks Mutate Auth"
   on public.world_blocks
   for all
@@ -613,13 +628,15 @@ create policy "World Blocks Mutate Auth"
 
 -- Block updates
 drop policy if exists "Block Updates Select Auth" on public.block_updates;
-    create policy "Block Updates Select Auth"
+    DROP POLICY IF EXISTS "Block Updates Select Auth" ON public.block_updates;
+create policy "Block Updates Select Auth"
 on public.block_updates
 for select
 using (auth.role() = 'authenticated');
 
 drop policy if exists "Block Updates Insert Own" on public.block_updates;
-    create policy "Block Updates Insert Own"
+    DROP POLICY IF EXISTS "Block Updates Insert Own" ON public.block_updates;
+create policy "Block Updates Insert Own"
 on public.block_updates
 for insert
 with check (user_id = auth.uid());
@@ -782,6 +799,7 @@ end $$;
 -- ---------------------------
 -- materials (read-only)
 -- ---------------------------
+DROP POLICY IF EXISTS "Materials Select Auth" ON public.materials;
 create policy "Materials Select Auth"
 on public.materials
 for select
@@ -791,6 +809,7 @@ using (true);
 -- ---------------------------
 -- worlds (read-only list)
 -- ---------------------------
+DROP POLICY IF EXISTS "Worlds Select Auth" ON public.worlds;
 create policy "Worlds Select Auth"
 on public.worlds
 for select
@@ -801,12 +820,14 @@ using (true);
 -- player_profiles (public read, self write)
 -- ---------------------------
 
+DROP POLICY IF EXISTS "Profiles Insert Own" ON public.player_profiles;
 create policy "Profiles Insert Own"
 on public.player_profiles
 for insert
 to authenticated
 with check (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Profiles Update Own" ON public.player_profiles;
 create policy "Profiles Update Own"
 on public.player_profiles
 for update
@@ -817,18 +838,21 @@ with check (auth.uid() = user_id);
 -- ---------------------------
 -- player_state (self write, everyone can read)
 -- ---------------------------
+DROP POLICY IF EXISTS "State Select Auth" ON public.player_state;
 create policy "State Select Auth"
 on public.player_state
 for select
 to authenticated
 using (true);
 
+DROP POLICY IF EXISTS "State Insert Own" ON public.player_state;
 create policy "State Insert Own"
 on public.player_state
 for insert
 to authenticated
 with check (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "State Update Own" ON public.player_state;
 create policy "State Update Own"
 on public.player_state
 for update
@@ -840,12 +864,14 @@ with check (auth.uid() = user_id);
 -- block_updates (event log)
 -- Guests are READ-ONLY (no inserts) to match client rules.
 -- ---------------------------
+DROP POLICY IF EXISTS "Block Updates Select Auth" ON public.block_updates;
 create policy "Block Updates Select Auth"
 on public.block_updates
 for select
 to authenticated
 using (true);
 
+DROP POLICY IF EXISTS "Block Updates Insert Own" ON public.block_updates;
 create policy "Block Updates Insert Own"
 on public.block_updates
 for insert
@@ -864,12 +890,14 @@ with check (
 -- Guests are READ-ONLY.
 -- We allow INSERT/UPDATE for non-guest authenticated users only.
 -- ---------------------------
+DROP POLICY IF EXISTS "World Blocks Select Auth" ON public.world_blocks;
 create policy "World Blocks Select Auth"
 on public.world_blocks
 for select
 to authenticated
 using (true);
-      create policy "World Blocks Insert NonGuest"
+      DROP POLICY IF EXISTS "World Blocks Insert NonGuest" ON public.world_blocks;
+create policy "World Blocks Insert NonGuest"
 on public.world_blocks
 for insert
 to authenticated
@@ -877,7 +905,8 @@ with check (
   public.is_non_guest()
   and not public.in_spawn_protection(x, z)
 );
-      create policy "World Blocks Update NonGuest"
+      DROP POLICY IF EXISTS "World Blocks Update NonGuest" ON public.world_blocks;
+create policy "World Blocks Update NonGuest"
 on public.world_blocks
 for update
 to authenticated
@@ -891,18 +920,21 @@ with check (
 -- ---------------------------
 -- player_inventories (self-owned)
 -- ---------------------------
+DROP POLICY IF EXISTS "Inv Select Own" ON public.player_inventories;
 create policy "Inv Select Own"
 on public.player_inventories
 for select
 to authenticated
 using (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Inv Insert Own" ON public.player_inventories;
 create policy "Inv Insert Own"
 on public.player_inventories
 for insert
 to authenticated
 with check (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Inv Update Own" ON public.player_inventories;
 create policy "Inv Update Own"
 on public.player_inventories
 for update
@@ -910,6 +942,7 @@ to authenticated
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Inv Delete Own" ON public.player_inventories;
 create policy "Inv Delete Own"
 on public.player_inventories
 for delete
@@ -920,6 +953,7 @@ using (auth.uid() = user_id);
 -- inventory_slots (self-owned via inventory -> user_id)
 -- Assumes inventory_slots has inventory_id referencing player_inventories(id)
 -- ---------------------------
+DROP POLICY IF EXISTS "Slots Own" ON public.inventory_slots;
 create policy "Slots Own"
 on public.inventory_slots
 for select
@@ -931,7 +965,8 @@ using (
       and i.user_id = auth.uid()
   )
 );
-      create policy "Slots Insert Own"
+      DROP POLICY IF EXISTS "Slots Insert Own" ON public.inventory_slots;
+create policy "Slots Insert Own"
 on public.inventory_slots
 for insert
 to authenticated
@@ -942,7 +977,8 @@ with check (
       and i.user_id = auth.uid()
   )
 );
-      create policy "Slots Update Own"
+      DROP POLICY IF EXISTS "Slots Update Own" ON public.inventory_slots;
+create policy "Slots Update Own"
 on public.inventory_slots
 for update
 to authenticated
@@ -960,7 +996,8 @@ with check (
       and i.user_id = auth.uid()
   )
 );
-      create policy "Slots Delete Own"
+      DROP POLICY IF EXISTS "Slots Delete Own" ON public.inventory_slots;
+create policy "Slots Delete Own"
 on public.inventory_slots
 for delete
 to authenticated
@@ -975,23 +1012,27 @@ using (
 -- ---------------------------
 -- player_stats (self-owned)
 -- ---------------------------
-      create policy "Stats Select Own"
+      DROP POLICY IF EXISTS "Stats Select Own" ON public.player_stats;
+create policy "Stats Select Own"
 on public.player_stats
 for select
 to authenticated
 using (auth.uid() = user_id);
-      create policy "Stats Insert Own"
+      DROP POLICY IF EXISTS "Stats Insert Own" ON public.player_stats;
+create policy "Stats Insert Own"
 on public.player_stats
 for insert
 to authenticated
 with check (auth.uid() = user_id);
-      create policy "Stats Update Own"
+      DROP POLICY IF EXISTS "Stats Update Own" ON public.player_stats;
+create policy "Stats Update Own"
 on public.player_stats
 for update
 to authenticated
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
-      create policy "Stats Delete Own"
+      DROP POLICY IF EXISTS "Stats Delete Own" ON public.player_stats;
+create policy "Stats Delete Own"
 on public.player_stats
 for delete
 to authenticated
@@ -1000,12 +1041,14 @@ using (auth.uid() = user_id);
 -- chat_messages (if table exists)
 -- Everyone authenticated (including guests) can read + send as themselves.
 -- ---------------------------
-  create policy "chat_select_world"
+  DROP POLICY IF EXISTS "chat_select_world" ON public.chat_messages;
+create policy "chat_select_world"
   on public.chat_messages
   for select
   to authenticated
   using (true);
-  create policy "chat_insert_self"
+  DROP POLICY IF EXISTS "chat_insert_self" ON public.chat_messages;
+create policy "chat_insert_self"
   on public.chat_messages
   for insert
   to authenticated
@@ -1029,7 +1072,8 @@ do $$ begin
   execute 'drop policy if exists "Profiles Select Own" on public.player_profiles';
   execute 'drop policy if exists "Profiles Select Auth" on public.player_profiles';
   begin
-  create policy "Profiles Select Auth" on public.player_profiles for select to authenticated using (true);
+  DROP POLICY IF EXISTS "Profiles Select Auth" ON public.player_profiles;
+create policy "Profiles Select Auth" on public.player_profiles for select to authenticated using (true);
 exception when duplicate_object then null; end;
 exception when undefined_table then null; end $$;
 
@@ -1054,8 +1098,10 @@ alter table public.recipes enable row level security;
 alter table public.recipe_ingredients enable row level security;
 
 drop policy if exists "recipes_select" on public.recipes;
+DROP POLICY IF EXISTS "recipes_select" ON public.recipes;
 create policy "recipes_select" on public.recipes for select to authenticated using (true);
 drop policy if exists "recipe_ingredients_select" on public.recipe_ingredients;
+DROP POLICY IF EXISTS "recipe_ingredients_select" ON public.recipe_ingredients;
 create policy "recipe_ingredients_select" on public.recipe_ingredients for select to authenticated using (true);
 insert into public.recipes (code, name, output_material_code, output_qty) values
   ('planks_from_log', 'Planks (from Log)', 'oak_planks', 4),
@@ -1088,6 +1134,7 @@ create index if not exists mobs_world_idx on public.mobs(world_id);
 alter table public.mobs enable row level security;
 
 drop policy if exists "mobs_select" on public.mobs;
+DROP POLICY IF EXISTS "mobs_select" ON public.mobs;
 create policy "mobs_select" on public.mobs for select to authenticated using (true);
 -- Only mods/admins can update mobs via SECURITY DEFINER RPC (no direct policies)
 
@@ -1328,84 +1375,14 @@ on conflict (slug) do nothing;
 -- Idempotent policy creation for crafting & mobs (safe re-run)
 -- =======================
 drop policy if exists "recipes_select" on public.recipes;
+DROP POLICY IF EXISTS "recipes_select" ON public.recipes;
 create policy "recipes_select" on public.recipes for select to authenticated using (true);
 
 drop policy if exists "recipe_ingredients_select" on public.recipe_ingredients;
+DROP POLICY IF EXISTS "recipe_ingredients_select" ON public.recipe_ingredients;
 create policy "recipe_ingredients_select" on public.recipe_ingredients for select to authenticated using (true);
 
 drop policy if exists "mobs_select" on public.mobs;
+DROP POLICY IF EXISTS "mobs_select" ON public.mobs;
 create policy "mobs_select" on public.mobs for select to authenticated using (true);
 
-
-
--- =========================
--- Minecraft-ish crafting / smelting (DB-driven)
--- =========================
-CREATE TABLE IF NOT EXISTS public.kidcraft_recipes (
-  id bigserial PRIMARY KEY,
-  name text NOT NULL,
-  station text NOT NULL DEFAULT 'inventory',
-  output_code text NOT NULL,
-  output_qty int NOT NULL DEFAULT 1,
-  enabled boolean NOT NULL DEFAULT true
-);
-
-CREATE TABLE IF NOT EXISTS public.kidcraft_recipe_ingredients (
-  recipe_id bigint NOT NULL REFERENCES public.kidcraft_recipes(id) ON DELETE CASCADE,
-  input_code text NOT NULL,
-  qty int NOT NULL DEFAULT 1,
-  PRIMARY KEY (recipe_id, input_code)
-);
-
-CREATE TABLE IF NOT EXISTS public.kidcraft_smelting_recipes (
-  id bigserial PRIMARY KEY,
-  name text NOT NULL,
-  input_code text NOT NULL,
-  output_code text NOT NULL,
-  output_qty int NOT NULL DEFAULT 1,
-  cook_time_ms int NOT NULL DEFAULT 6000,
-  enabled boolean NOT NULL DEFAULT true
-);
-
-CREATE TABLE IF NOT EXISTS public.kidcraft_player_inventory (
-  user_id uuid PRIMARY KEY,
-  items jsonb NOT NULL DEFAULT '{}'::jsonb,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS public.kidcraft_world_block_edits (
-  world_id uuid NOT NULL,
-  x int NOT NULL,
-  y int NOT NULL,
-  z int NOT NULL,
-  code text NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (world_id, x, y, z)
-);
-
-ALTER TABLE public.kidcraft_player_inventory ENABLE ROW LEVEL SECURITY;
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='inv_owner_rw') THEN
-    CREATE POLICY inv_owner_rw ON public.kidcraft_player_inventory
-      FOR ALL TO authenticated
-      USING (auth.uid() = user_id)
-      WITH CHECK (auth.uid() = user_id);
-  END IF;
-END$$;
-
-ALTER TABLE public.kidcraft_world_block_edits ENABLE ROW LEVEL SECURITY;
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_read') THEN
-    CREATE POLICY world_edits_read ON public.kidcraft_world_block_edits
-      FOR SELECT TO anon, authenticated
-      USING (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_write_auth') THEN
-    CREATE POLICY world_edits_write_auth ON public.kidcraft_world_block_edits
-      FOR INSERT, UPDATE TO authenticated
-      USING (true)
-      WITH CHECK (true);
-  END IF;
-END$$;
