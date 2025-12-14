@@ -719,7 +719,6 @@ async function pushPlayerState(){
   const turned = Math.abs(r-ls.r) > 0.01;
   if (!moved && !turned) return;
   ls.x=p.x; ls.y=p.y; ls.z=p.z; ls.r=r;
-  const p = controls.object.position;
   await supabase.from("player_state").upsert({
     user_id: userId(),
     world_id: worldId,
