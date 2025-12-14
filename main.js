@@ -11,20 +11,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const WORLD_SLUG = "overworld"; // matches SQL seed
-
-// Vertical world limits (Minecraft-ish feel)
-const MIN_Y = -32;      // bottom "bedrock-ish" depth (unbreakable layer at MIN_Y)
-const MAX_Y = 160;      // soft cap used for ore/noise math (rendered by exposure culling)
-
-// Cave generation (client-side procedural)
-const CAVE_START_Y = 8;      // below this (and down into negatives) caves can appear
-const CAVE_END_Y   = 60;     // above this, caves stop (keeps surface solid)
-const CAVE_FREQ    = 0.09;   // cave noise frequency
-const CAVE_THRESH  = 0.16;   // lower => more caves
-const CAVE_TUBE    = 0.10;   // tube strength
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
 const ENABLE_GUEST_BUTTON = true;
@@ -33,9 +22,6 @@ const ENABLE_GUEST_BUTTON = true;
 // SUPABASE
 // =======================
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// Load material list (blocks/ores) from DB to drive palette + world variety
-loadMaterialsFromDB();
 
 /* =======================
    PROFILE + USERNAME (created in-game)
@@ -124,30 +110,8 @@ ui.signup.onclick = async () => {
   if (p.length < 6) return setStatus("Password must be at least 6 characters.");
   savePreferredUsername(u);
   if (ui.username) ui.username.value = u;
-
-  // Guarantee: only log in after a successful account creation.
-  setStatus("Creating account...");
-  const res = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
-
-  if (res?.error) {
-    console.warn("[Auth] signUp error:", res.error);
-    const msg = (res.error.message || "").toLowerCase();
-
-    // If user already exists, don't log in automatically (you asked for account creation first).
-    if (msg.includes("already") || msg.includes("exists") || res.error.status === 422) {
-      return setStatus("Account already exists. Click Log in instead.");
-    }
-    return setStatus(res.error.message || "Sign up failed.");
-  }
-
-  // At this point Supabase has created the user. Now we can log in.
-  setStatus("Account created. Logging in...");
-  const li = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
-  if (li?.error) {
-    console.warn("[Auth] signIn after signup error:", li.error);
-    return setStatus("Account created. Please click Log in.");
-  }
-  setStatus("Logged in.");
+  const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
+  setStatus(error ? error.message : "Signed up. Now log in.");
 };
 
 ui.login.onclick = async () => {
@@ -185,165 +149,12 @@ const chunkMeshes = new Map(); // chunkKey -> THREE.Group
 
 // Material palette (minimal starter; extend to your full materials table later)
 const BLOCKS = [
-  { code:'crafting_table', name:'Crafting Table', color:0x8b5a2b },
-  { code:'furnace', name:'Furnace', color:0x555555 },
   { code: "grass_block", name: "Grass", color: 0x2a8f3a },
   { code: "dirt", name: "Dirt", color: 0x7a4f2a },
   { code: "stone", name: "Stone", color: 0x7a7a7a },
   { code: "sand", name: "Sand", color: 0xd7c87a },
   { code: "oak_planks", name: "Planks", color: 0xa06b2d },
 ];
-
-
-// =======================
-// === TOOLS + HARVEST RULES (Minecraft-ish) ===
-const TOOL_TIER = { hand:0, wood:1, stone:2, iron:3, diamond:4 };
-const TOOL_SPEED = { hand:1.0, wood:2.0, stone:4.0, iron:6.0, diamond:8.0 };
-
-const TOOLS = [
-  { kind:"tool", code:"wooden_pickaxe", display:"Wood Pick", toolType:"pickaxe", tier:"wood" },
-  { kind:"tool", code:"wooden_shovel",  display:"Wood Shovel", toolType:"shovel",  tier:"wood", dur:60 },
-  { kind:"tool", code:"wooden_axe",     display:"Wood Axe",    toolType:"axe",     tier:"wood", dur:60 },
-];
-
-let HOTBAR_ITEMS = []; // tools + blocks
-function getActiveItem(){
-  return HOTBAR_ITEMS[activeSlot] || { kind:"block", code:"dirt" };
-}
-
-function requiredToolFor(code){
-  const c = String(code||"");
-  const lc = c.toLowerCase();
-  // Prefer DB props/tags if present
-  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
-  const rt = def?.props?.required_tool || def?.required_tool;
-  if (rt) return rt;
-
-  if (c === "grass_block" || c === "dirt" || c === "sand" || c === "gravel") return "shovel";
-  if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) return "axe";
-  if (lc.includes("stone") || lc.includes("cobble") || lc.includes("ore")) return "pickaxe";
-  return "hand";
-}
-
-function minToolTierFor(code){
-  const c = String(code||"");
-  const lc = c.toLowerCase();
-  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
-  const mt = def?.props?.min_tool_tier || def?.min_tool_tier;
-  if (mt) return mt;
-
-  // Minecraft-ish defaults
-  if (lc.includes("diamond") || lc.includes("emerald") || lc.includes("gold")) return "iron";
-  if (lc.includes("iron") || lc.includes("copper") || lc.includes("lapis") || lc.includes("redstone")) return "stone";
-  if (lc.includes("ore") || c === "stone" || c === "cobblestone") return "wood";
-  return "hand";
-}
-
-function dropForBlock(code){
-  const c = String(code||"");
-  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
-  const drop = def?.props?.drops || def?.drops;
-  if (drop) return drop;
-
-  const lc = c.toLowerCase();
-  // Minecraft-ish ore drops (simplified; no fortune)
-  if (lc.includes("coal_ore")) return "coal";
-  if (lc.includes("iron_ore")) return "raw_iron";
-  if (lc.includes("copper_ore")) return "raw_copper";
-  if (lc.includes("gold_ore")) return "raw_gold";
-  if (lc.includes("diamond_ore")) return "diamond";
-  if (lc.includes("emerald_ore")) return "emerald";
-  if (lc.includes("lapis_ore")) return "lapis_lazuli";
-  if (lc.includes("redstone_ore")) return "redstone";
-
-  if (c === "grass_block") return "dirt";
-  if (c === "stone") return "cobblestone";
-  return c;
-}
-
-function canHarvestBlock(blockCode, toolItem){
-  const req = requiredToolFor(blockCode);
-  const minTier = TOOL_TIER[minToolTierFor(blockCode)] ?? 0;
-  const toolType = toolItem?.toolType || "hand";
-  const tier = TOOL_TIER[toolItem?.tier || "hand"] ?? 0;
-  if (req === "hand") return true;
-  if (toolType !== req) return false;
-  return tier >= minTier;
-}
-
-function toolSpeedMultiplier(blockCode, toolItem){
-  // If wrong tool type, slow down a lot (but still breakable)
-  const req = requiredToolFor(blockCode);
-  const toolType = toolItem?.toolType || "hand";
-  const tier = toolItem?.tier || "hand";
-  if (req !== "hand" && toolType !== req) return 0.25;
-  return TOOL_SPEED[tier] ?? 1.0;
-}
-
-// === Materials loaded from database (optional) ===
-let MATERIAL_DEFS = [];           // full list of block materials from DB
-let ORE_CODES = [];              // codes tagged 'ore'
-let COMMON_BLOCKS = [];          // curated list for hotbar
-let MATERIALS_READY = false;
-
-function hashColor(code){
-  // deterministic pleasing color for materials lacking explicit color props
-  const h = [...code].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7) % 360;
-  const s = 0.35;
-  const l = 0.55;
-  const [r,g,b] = colorsys.hls_to_rgb(h/360, l, s);
-  return ((int(r*255)&255)<<16) | ((int(g*255)&255)<<8) | (int(b*255)&255);
-}
-// tiny int helper (avoid Math.floor in hot path for color build)
-function int(x){ return x|0; }
-
-function pickCommonHotbar(materials){
-  const want = ["grass_block","dirt","stone","cobblestone","sand","oak_planks","oak_log","gravel","torch"];
-  const byCode = new Map(materials.map(m=>[m.code,m]));
-  const out = [];
-  for (const c of want){
-    const v = byCode.get(c);
-    if (v) out.push({ code: v.code, name: v.display_name, color: hashColor(v.code) });
-  }
-  // Fill remaining with other natural/wood blocks (non-ore) to 9 slots
-  const fallback = materials.filter(m=>m.tags?.includes("natural") || m.tags?.includes("wood") || m.tags?.includes("solid"))
-                            .filter(m=>!m.tags?.includes("ore") && m.code!=="air");
-  for (const mdef of fallback){
-    if (out.length>=9) break;
-    if (out.some(x=>x.code===mdef.code)) continue;
-    out.push({ code: mdef.code, name: mdef.display_name, color: hashColor(mdef.code) });
-  }
-  return out.slice(0,9);
-}
-
-async function loadMaterialsFromDB(){
-  try{
-    const { data, error } = await supabase
-      .from("materials")
-      .select("code, display_name, category, tags, hardness, props")
-      .eq("category","block")
-      .limit(5000);
-    if (error) { console.warn("[Materials] load failed:", error.message); return; }
-    MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
-    ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
-    COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
-    // If we found a decent set, replace BLOCKS used by hotbar/material palette.
-    if (COMMON_BLOCKS.length >= 5){
-      BLOCKS.length = 0;
-      for (const b of COMMON_BLOCKS) BLOCKS.push(b);
-      HOTBAR_ITEMS = [];
-      invLoad();
-  ensureStarterKit();
-  renderHotbar();
-    }
-    MATERIALS_READY = true;
-    console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
-  }catch(e){
-    console.warn("[Materials] load exception:", e);
-  }
-}
-
-
 
 // =======================
 // THREE.JS SETUP
@@ -368,79 +179,6 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 
 const controls = new PointerLockControls(camera, document.body);
-
-// =======================
-// === DAY/NIGHT + MOBS ===
-let timeOfDay = 0.15; // 0..1 (0.0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset)
-const DAY_SPEED = 1/900; // ~15 minutes per full day
-let playerHP = 20;
-let playerHunger = 20;
-
-function updateDayNight(dt){
-  timeOfDay = (timeOfDay + dt*DAY_SPEED) % 1;
-  const sun = Math.max(0, Math.sin((timeOfDay-0.25)*Math.PI*2)); // 0 at night, 1 at noon
-  const night = 1 - sun;
-  // adjust ambient + directional if present
-  if (window.__ambLight) window.__ambLight.intensity = 0.25 + 0.45*sun;
-  if (window.__dirLight){
-    window.__dirLight.intensity = 0.15 + 0.95*sun;
-    window.__dirLight.position.set(30*Math.cos(timeOfDay*2*Math.PI), 40*sun + 5, 30*Math.sin(timeOfDay*2*Math.PI));
-  }
-  // fog slightly thicker at night
-  if (scene.fog) scene.fog.density = 0.004 + 0.006*night;
-}
-const mobs = [];
-function spawnMobNearPlayer(){
-  if (mobs.length >= 6) return;
-  const px = controls.object.position.x;
-  const pz = controls.object.position.z;
-  const angle = Math.random()*Math.PI*2;
-  const dist = 14 + Math.random()*10;
-  const x = Math.floor(px + Math.cos(angle)*dist);
-  const z = Math.floor(pz + Math.sin(angle)*dist);
-  const y = groundHeightAt(x+0.5, z+0.5);
-  const geo = new THREE.BoxGeometry(0.8, 1.2, 0.8);
-  const mat = new THREE.MeshStandardMaterial({ color: 0x3c9b5a });
-  const m = new THREE.Mesh(geo, mat);
-  m.position.set(x+0.5, y+0.6, z+0.5);
-  m.userData = { hp: 10, speed: 1.2 + Math.random()*0.4, atkCd: 0 };
-  scene.add(m);
-  mobs.push(m);
-}
-function updateMobs(dt){
-  // only at night-ish
-  const sun = Math.max(0, Math.sin((timeOfDay-0.25)*Math.PI*2));
-  const night = 1 - sun;
-  if (night > 0.65 && Math.random() < dt*0.25) spawnMobNearPlayer();
-
-  const px = controls.object.position.x;
-  const pz = controls.object.position.z;
-  const py = controls.object.position.y;
-
-  for (let i=mobs.length-1;i>=0;i--){
-    const m = mobs[i];
-    const dx = px - m.position.x;
-    const dz = pz - m.position.z;
-    const dist = Math.hypot(dx,dz);
-    if (dist > 60){
-      scene.remove(m); mobs.splice(i,1); continue;
-    }
-    if (dist > 0.8){
-      m.position.x += (dx/dist) * m.userData.speed * dt;
-      m.position.z += (dz/dist) * m.userData.speed * dt;
-      // keep on ground
-      m.position.y = groundHeightAt(m.position.x, m.position.z) + 0.6;
-    } else {
-      m.userData.atkCd -= dt;
-      if (m.userData.atkCd <= 0){
-        m.userData.atkCd = 0.7;
-        playerHP = Math.max(0, playerHP - 1);
-        setHint("Ouch! HP: "+playerHP);
-      }
-    }
-  }
-}
-
 scene.add(controls.object);
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
@@ -482,179 +220,6 @@ document.body.addEventListener("click", () => {
 });
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-}
-
-
-
-// =======================
-// === BLOCK BREAK FX (Minecraft-ish) ===
-let breakTargetKey = null;
-let breakProgress = 0;          // 0..1
-let breaking = false;
-let breakHoldStart = 0;
-let crackOverlay = null;
-let crackMat = null;
-const BREAK_TIME_MS_BASE = 520;      // base time (ms) for dirt-ish blocks
-let breakTimeMs = BREAK_TIME_MS_BASE;
-
-function breakTimeFor(code, toolItem){
-  const c = String(code||"");
-  // Use DB hardness if available
-  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
-  const h = def?.hardness;
-
-  // Base time from hardness (Minecraft-ish)
-  // Minecraft hardness: dirt 0.5, stone 1.5, ore 3.0; we map into ms
-  let base = BREAK_TIME_MS_BASE;
-  if (typeof h === "number" && isFinite(h)){
-    // ~0.5 => ~380ms, 1.5 => ~900ms, 3.0 => ~1200ms, obsidian 50 => very long
-    base = Math.max(220, Math.min(6500, 180 + h*480));
-  } else {
-    const lc = c.toLowerCase();
-    if (c === "grass_block" || c === "dirt" || lc.includes("leaves")) base = 380;
-    else if (c === "sand" || c === "gravel") base = 430;
-    else if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) base = 620;
-    else if (lc.includes("ore")) base = 1200;
-    else if (c === "stone" || c === "cobblestone") base = 900;
-    else base = BREAK_TIME_MS_BASE;
-  }
-
-  // Tool speed
-  const speed = toolSpeedMultiplier(c, toolItem);
-  // If wrong/too-low tool tier, still breakable but much slower (Minecraft-ish feel)
-  const harvestOk = canHarvestBlock(c, toolItem);
-  const tierPenalty = harvestOk ? 1.0 : 3.0;
-
-  return Math.max(120, base / Math.max(0.1, speed)) * tierPenalty;
-}
-
-function tex_crack(stage){
-  // stage 0..9
-  const key = "crack_"+stage;
-  return makeCanvasTexture((ctx)=>{
-    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "rgba(255,255,255,0.55)";
-    // deterministic pseudo-random crack lines per stage
-    for (let i=0;i<stage*2+2;i++){
-      const x0 = (i*3 + stage*5) % TEX_SIZE;
-      const y0 = (i*7 + stage*9) % TEX_SIZE;
-      const x1 = (x0 + 6 + (i%3)*3) % TEX_SIZE;
-      const y1 = (y0 + 4 + (i%4)*2) % TEX_SIZE;
-      ctx.beginPath();
-      ctx.moveTo(x0+0.5, y0+0.5);
-      ctx.lineTo(x1+0.5, y1+0.5);
-      ctx.stroke();
-    }
-    // sprinkle pixels
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    for (let i=0;i<stage*8;i++){
-      const x = (i*11 + stage*13) % TEX_SIZE;
-      const y = (i*5  + stage*17) % TEX_SIZE;
-      ctx.fillRect(x,y,1,1);
-    }
-  }, key);
-}
-
-function ensureCrackOverlay(){
-  if (crackOverlay) return;
-  crackMat = texturedMat(tex_crack(0), { transparent: true, alphaTest: 0.05, side: THREE.DoubleSide });
-  crackMat.depthTest = true;
-  crackMat.depthWrite = false;
-  crackMat.polygonOffset = true;
-  crackMat.polygonOffsetFactor = -1;
-  crackMat.polygonOffsetUnits = -1;
-
-  const g = new THREE.BoxGeometry(1.02, 1.02, 1.02);
-  crackOverlay = new THREE.Mesh(g, crackMat);
-  crackOverlay.visible = false;
-  crackOverlay.renderOrder = 999;
-  scene.add(crackOverlay);
-}
-
-function setCrackStage(stage){
-  ensureCrackOverlay();
-  stage = Math.max(0, Math.min(9, stage|0));
-  const tex = tex_crack(stage);
-  crackMat.map = tex;
-  crackMat.needsUpdate = true;
-}
-
-function showCrackAt(x,y,z){
-  ensureCrackOverlay();
-  crackOverlay.visible = true;
-  crackOverlay.position.set(x+0.5, y+0.5, z+0.5);
-}
-
-function hideCrack(){
-  if (!crackOverlay) return;
-  crackOverlay.visible = false;
-  breakTargetKey = null;
-  breakProgress = 0;
-  breaking = false;
-}
-
-function spawnBlockParticles(x,y,z, baseCode){
-  // simple burst of small quads; purely visual, no collision
-  const count = 10 + ((Math.random()*6)|0);
-  const group = new THREE.Group();
-  const tex = (()=>{
-    if (baseCode==="grass_block") return tex_grass_top();
-    if (baseCode==="dirt") return tex_dirt();
-    if (baseCode==="sand") return tex_sand();
-    if (baseCode==="stone" || baseCode==="cobblestone") return tex_stone();
-    return null;
-  })();
-  const mat = tex ? texturedMat(tex, { transparent: true, alphaTest: 0.15, side: THREE.DoubleSide }) :
-                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
-
-  const geo = new THREE.PlaneGeometry(0.14, 0.14);
-  const now = performance.now();
-  group.userData.birth = now;
-  group.userData.parts = [];
-
-  for (let i=0;i<count;i++){
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x+0.5, y+0.5, z+0.5);
-    m.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
-    const vel = new THREE.Vector3(
-      (Math.random()-0.5)*1.6,
-      1.0 + Math.random()*1.6,
-      (Math.random()-0.5)*1.6
-    );
-    group.userData.parts.push({ mesh: m, vel });
-    group.add(m);
-  }
-  scene.add(group);
-
-  // add to a global list for update in animate
-  if (!window.__particleBursts) window.__particleBursts = [];
-  window.__particleBursts.push(group);
-}
-
-function updateParticles(dt){
-  const arr = window.__particleBursts;
-  if (!arr || !arr.length) return;
-  for (let i=arr.length-1;i>=0;i--){
-    const g = arr[i];
-    const age = (performance.now() - g.userData.birth) / 1000;
-    if (age > 0.7){
-      scene.remove(g);
-      arr.splice(i,1);
-      continue;
-    }
-    for (const p of g.userData.parts){
-      p.vel.y -= 5.5 * dt; // gravity
-      p.mesh.position.addScaledVector(p.vel, dt);
-      p.mesh.rotation.x += 2.0*dt;
-      p.mesh.rotation.y += 1.6*dt;
-      // fade out
-      if (p.mesh.material && p.mesh.material.opacity !== undefined){
-        p.mesh.material.opacity = Math.max(0, 0.85 - age*1.1);
-      }
-    }
-  }
-}
 
 // =======================
 // AUDIO (no external assets) + FEEDBACK
@@ -697,26 +262,6 @@ function playSfx(kind){
   if (kind === "step")  return tone(160 + Math.random()*40, 0.03, "triangle", 0.03);
 }
 
-
-let lastStepTime = 0;
-function surfaceCodeUnderPlayer(){
-  const px = Math.floor(controls.object.position.x);
-  const pz = Math.floor(controls.object.position.z);
-  const py = Math.floor(controls.object.position.y - 1.1);
-  return getBlockCode(px, py, pz);
-}
-function stepSfxNameFor(code){
-  const c = String(code||"");
-  const lc = c.toLowerCase();
-  if (c === "grass_block" || lc.includes("grass")) return "step_grass";
-  if (c === "dirt") return "step_dirt";
-  if (c === "sand") return "step_sand";
-  if (c === "gravel") return "step_gravel";
-  if (lc.includes("wood") || lc.includes("plank") || lc.includes("log")) return "step_wood";
-  if (lc.includes("stone") || lc.includes("cobble") || lc.includes("ore")) return "step_stone";
-  return "step_generic";
-}
-
 function bumpShake(amount=0.12){
   // used by movement + block actions
   shake = Math.min(0.25, (shake || 0) + amount);
@@ -727,461 +272,22 @@ function bumpShake(amount=0.12){
 // HOTBAR / INVENTORY (minimal)
 // =======================
 let hotbarIndex = 0;
-
-
-let uiStationOpen = null;
-let uiStationPos = null;
-let furnaceState = new Map(); // key -> {inCode,inN,fuelCode,fuelN,outCode,outN,prog,burning}
-
-function ensureUIRoot(){
-  let root = document.getElementById("stationUI");
-  if (root) return root;
-  root = document.createElement("div");
-  root.id = "stationUI";
-  root.style.display = "none";
-  root.innerHTML = `
-    <div class="panel">
-      <div class="title"><span id="stTitle"></span><button id="stClose">X</button></div>
-      <div id="stBody"></div>
-    </div>`;
-  document.body.appendChild(root);
-  root.querySelector("#stClose").onclick = ()=> closeStationUI();
-  return root;
-}
-
-function openStationUI(kind, posKey){
-  uiStationOpen = kind;
-  uiStationPos = posKey;
-  const root = ensureUIRoot();
-  root.style.display = "block";
-  document.getElementById("stTitle").textContent = kind === "crafting_table" ? "Crafting Table" : "Furnace";
-  renderStationUI();
-}
-function closeStationUI(){
-  const root = ensureUIRoot();
-  root.style.display = "none";
-  uiStationOpen = null;
-  uiStationPos = null;
-}
-
-function renderStationUI(){
-  const body = document.getElementById("stBody");
-  if (!body) return;
-  if (uiStationOpen === "crafting_table"){
-    // list DB recipes for station 'crafting_table'
-    const list = (window.__recipes || []).filter(r => (r.station||"") === "crafting_table");
-    body.innerHTML = `<div class="small">Click a recipe to craft if you have ingredients.</div>
-      <div class="recipeList">${list.map((r,i)=>{
-        const req = r.in.map(([c,n])=>`${c} x${n}`).join(", ");
-        return `<button class="recipeBtn" data-i="${i}">${r.out[0]} x${r.out[1]}<span>${req}</span></button>`;
-      }).join("")}</div>`;
-    body.querySelectorAll(".recipeBtn").forEach(btn=>{
-      btn.onclick = ()=>{
-        const i = parseInt(btn.dataset.i,10);
-        const r = list[i];
-        if (!r) return;
-        if (!canCraft(r)) { setHint("Missing ingredients"); return; }
-        consumeIngredients(r);
-        addToInventory(r.out[0], r.out[1]);
-        setHint(`Crafted ${r.out[0]} x${r.out[1]}`);
-      };
-    });
-  } else if (uiStationOpen === "furnace"){
-    const st = getFurnace(uiStationPos);
-    body.innerHTML = `
-      <div class="grid2">
-        <div><div class="lbl">Input</div><input id="fIn" placeholder="e.g. raw_iron" value="${st.inCode||""}"/><input id="fInN" type="number" min="0" value="${st.inN||0}"/></div>
-        <div><div class="lbl">Fuel</div><input id="fFuel" placeholder="e.g. coal" value="${st.fuelCode||""}"/><input id="fFuelN" type="number" min="0" value="${st.fuelN||0}"/></div>
-      </div>
-      <div class="row"><button id="fStart">Start</button><div class="bar"><div class="barIn" style="width:${Math.floor((st.prog||0)*100)}%"></div></div></div>
-      <div class="row small">Output: <b>${st.outCode||"-"}</b> x <b>${st.outN||0}</b></div>
-    `;
-    body.querySelector("#fStart").onclick = ()=>{
-      st.inCode = body.querySelector("#fIn").value.trim();
-      st.inN = parseInt(body.querySelector("#fInN").value,10)||0;
-      st.fuelCode = body.querySelector("#fFuel").value.trim();
-      st.fuelN = parseInt(body.querySelector("#fFuelN").value,10)||0;
-      setFurnace(uiStationPos, st);
-      setHint("Furnace running...");
-    };
-  }
-}
-
-function canCraft(recipe){
-  return recipe.in.every(([c,n]) => (getInventoryCount(c) >= n));
-}
-function consumeIngredients(recipe){
-  for (const [c,n] of recipe.in) addToInventory(c, -n);
-}
-
-function getFurnace(key){
-  if (!furnaceState.has(key)) furnaceState.set(key, { inCode:"", inN:0, fuelCode:"", fuelN:0, outCode:"", outN:0, prog:0, burning:false });
-  return furnaceState.get(key);
-}
-function setFurnace(key, st){
-  furnaceState.set(key, st);
-}
-
-function updateFurnaces(dt){
-  // timed smelting using DB smelting recipes if present
-  const smelts = window.__smelts || [];
-  for (const [k,st] of furnaceState.entries()){
-    if (!st.inCode || st.inN<=0) { st.burning=false; st.prog=0; continue; }
-    const rec = smelts.find(r=>r.in===st.inCode);
-    if (!rec) { st.burning=false; st.prog=0; continue; }
-    if (st.fuelN<=0) { st.burning=false; continue; }
-    st.burning=true;
-    st.prog = (st.prog||0) + dt/3.5; // ~3.5s per item
-    if (st.prog >= 1){
-      st.prog = 0;
-      st.inN -= 1;
-      // consume fuel occasionally
-      if (Math.random()<0.35) st.fuelN -= 1;
-      st.outCode = rec.out;
-      st.outN = (st.outN||0) + 1;
-      // auto-pickup into player inventory if near and UI open
-      if (distanceToPlayerKey(k) < 4.5){
-        addToInventory(st.outCode, 1);
-        st.outN -= 1;
-        setHint(`Smelted: ${st.outCode}`);
-      }
-    }
-    if (uiStationOpen==="furnace" && uiStationPos===k) renderStationUI();
-  }
-}
-function distanceToPlayerKey(key){
-  const [x,y,z] = key.split(",").map(Number);
-  const p = controls.object.position;
-  return Math.hypot((x+0.5)-p.x, (z+0.5)-p.z);
-}
-
-function swingHotbar(){
-  const el = document.getElementById("hotbar");
-  if (!el) return;
-  el.classList.remove("swing");
-  // force reflow
-  void el.offsetWidth;
-  el.classList.add("swing");
-  setTimeout(()=> el.classList.remove("swing"), 180);
-}
-
-
-// =======================
-// === SURVIVAL INVENTORY + CRAFTING (Minecraft-ish) ===
-let INV = {}; // code -> count
-let invOpen = false;
-
-
-// Supabase inventory persistence (per user)
-let invDirty = false;
-let invSaveTimer = null;
-
-async function loadInventoryFromDB(){
-  if (!supabase) return;
-  const u = (await supabase.auth.getUser()).data?.user;
-  if (!u) return;
-  try{
-    const { data } = await supabase.from("kidcraft_player_inventory").select("items").eq("user_id", u.id).maybeSingle();
-    if (data && data.items){
-      inv = data.items;
-      invDirty = false;
-      renderInventory();
-  scheduleInventorySave();
-      renderHotbar();
-    } else {
-      await supabase.from("kidcraft_player_inventory").upsert({ user_id: u.id, items: inv }, { onConflict:"user_id" });
-    }
-  }catch(e){}
-}
-
-function scheduleInventorySave(){
-  invDirty = true;
-  if (invSaveTimer) return;
-  invSaveTimer = setTimeout(saveInventoryToDB, 600);
-}
-
-async function saveInventoryToDB(){
-  invSaveTimer = null;
-  if (!invDirty || !supabase) return;
-  const u = (await supabase.auth.getUser()).data?.user;
-  if (!u) return;
-  invDirty = false;
-  try{ await supabase.from("kidcraft_player_inventory").upsert({ user_id: u.id, items: inv }, { onConflict:"user_id" }); }catch(e){}
-}
-
-function invStorageKey(){
-  const u = (typeof loadPreferredUsername === "function" ? loadPreferredUsername() : null) || localStorage.getItem("kidcraft_username") || "guest";
-  return "kidcraft_inv_" + u;
-}
-function invLoad(){
-  try{
-    const raw = localStorage.getItem(invStorageKey());
-    INV = raw ? JSON.parse(raw) : {};
-  }catch(e){ INV = {}; }
-}
-function invSave(){
-  try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV)); }catch(e){}
-}
-function invCount(code){ return (INV && INV[code]) ? INV[code] : 0; }
-function invAdd(code, n=1){
-  if (!code) return;
-  INV[code] = (INV[code]||0) + n;
-  if (INV[code] <= 0) delete INV[code];
-  invSave();
-  renderHotbar();
-  renderInventoryPanel();
-}
-function invTake(code, n=1){
-  const c = invCount(code);
-  if (c < n) return false;
-  INV[code] = c - n;
-  if (INV[code] <= 0) delete INV[code];
-  invSave();
-  renderHotbar();
-  renderInventoryPanel();
-  return true;
-}
-function invHas(inputs){
-  for (const [code, n] of inputs){
-    if (invCount(code) < n) return false;
-  }
-  return true;
-}
-function invConsume(inputs){
-  if (!invHas(inputs)) return false;
-  for (const [code,n] of inputs) invTake(code,n);
-  return true;
-}
-
-// Starting kit (Minecraft-ish vibe; tweak as you like)
-function ensureStarterKit(){
-  if (localStorage.getItem(invStorageKey()+"_init")) return;
-  invAdd("dirt", 32);
-  invAdd("grass_block", 16);
-  invAdd("cobblestone", 24);
-  invAdd("oak_log", 8);
-  invAdd("oak_planks", 16);
-  // starter tools
-  invAdd("wooden_pickaxe", 1);
-  invAdd("wooden_shovel", 1);
-  invAdd("wooden_axe", 1);
-  localStorage.setItem(invStorageKey()+"_init","1");
-}
-
-function toolTierRank(code){
-  const c = String(code||"");
-  if (c.startsWith("diamond_")) return TOOL_TIER.diamond;
-  if (c.startsWith("iron_")) return TOOL_TIER.iron;
-  if (c.startsWith("stone_")) return TOOL_TIER.stone;
-  if (c.startsWith("wooden_")) return TOOL_TIER.wood;
-  return TOOL_TIER.hand;
-}
-function bestToolCode(toolType){
-  const candidates = [
-    "diamond_"+toolType,
-    "iron_"+toolType,
-    "stone_"+toolType,
-    "wooden_"+toolType,
-  ];
-  for (const c of candidates){
-    if (invCount(c) > 0) return c;
-  }
-  return null;
-}
-
-// Crafting recipes (close to Minecraft, simplified; no fuel)
-
-    let RECIPES = [];
-    let SMELT_RECIPES = [];
-    const FALLBACK_RECIPES = [
-  { name:"Oak Planks (x4)", out:["oak_planks",4], in:[["oak_log",1]] },
-  { name:"Sticks (x4)", out:["stick",4], in:[["oak_planks",2]] },
-  { name:"Crafting Table", out:["crafting_table",1], in:[["oak_planks",4]] },
-
-  { name:"Wood Pickaxe", out:["wooden_pickaxe",1], in:[["oak_planks",3],["stick",2]] },
-  { name:"Wood Shovel",  out:["wooden_shovel",1],  in:[["oak_planks",1],["stick",2]] },
-  { name:"Wood Axe",     out:["wooden_axe",1],     in:[["oak_planks",3],["stick",2]] },
-
-  { name:"Stone Pickaxe", out:["stone_pickaxe",1], in:[["cobblestone",3],["stick",2]] },
-  { name:"Stone Shovel",  out:["stone_shovel",1],  in:[["cobblestone",1],["stick",2]] },
-  { name:"Stone Axe",     out:["stone_axe",1],     in:[["cobblestone",3],["stick",2]] },
-
-  // Smelting (very simplified)
-  { name:"Smelt Raw Iron → Iron Ingot", out:["iron_ingot",1], in:[["raw_iron",1]] },
-  { name:"Smelt Raw Copper → Copper Ingot", out:["copper_ingot",1], in:[["raw_copper",1]] },
-  { name:"Smelt Raw Gold → Gold Ingot", out:["gold_ingot",1], in:[["raw_gold",1]] },
-
-  { name:"Iron Pickaxe", out:["iron_pickaxe",1], in:[["iron_ingot",3],["stick",2]] },
-  { name:"Iron Shovel",  out:["iron_shovel",1],  in:[["iron_ingot",1],["stick",2]] },
-  { name:"Iron Axe",     out:["iron_axe",1],     in:[["iron_ingot",3],["stick",2]] },
-
-  { name:"Diamond Pickaxe", out:["diamond_pickaxe",1], in:[["diamond",3],["stick",2]] },
-  { name:"Diamond Shovel",  out:["diamond_shovel",1],  in:[["diamond",1],["stick",2]] },
-  { name:"Diamond Axe",     out:["diamond_axe",1],     in:[["diamond",3],["stick",2]] },
-];
-
-    async function loadRecipesFromDB(){
-      if (!supabase) { RECIPES = FALLBACK_RECIPES; return; }
-      try{
-        const { data: rdata, error: re } = await supabase.from("kidcraft_recipes")
-          .select("id,name,station,output_code,output_qty,enabled")
-          .eq("enabled", true);
-        if (re) throw re;
-        const { data: idata, error: ie } = await supabase.from("kidcraft_recipe_ingredients")
-          .select("recipe_id,input_code,qty");
-        if (ie) throw ie;
-        const byId = new Map();
-        for (const r of (rdata||[])) byId.set(r.id, { name:r.name, station:r.station, out:[r.output_code,r.output_qty], in:[] });
-        for (const ing of (idata||[])) {
-          const rr = byId.get(ing.recipe_id);
-          if (rr) rr.in.push([ing.input_code, ing.qty]);
-        }
-        RECIPES = Array.from(byId.values());
-      } catch(e) {
-        RECIPES = FALLBACK_RECIPES;
-      }
-
-      try{
-        const { data } = await supabase.from("kidcraft_smelting_recipes")
-          .select("name,input_code,output_code,output_qty,cook_time_ms,enabled")
-          .eq("enabled", true);
-        SMELT_RECIPES = (data||[]).map(r=>({ name:r.name, in:[[r.input_code,1]], out:[r.output_code,r.output_qty], cook_time_ms:r.cook_time_ms }));
-      } catch(e) {
-        SMELT_RECIPES = [];
-      }
-      renderInventory();
-  scheduleInventorySave();
-    }
-
-
-function ensureInventoryPanel(){
-  if (document.getElementById("invPanel")) return;
-  const panel = document.createElement("div");
-  panel.id = "invPanel";
-  panel.innerHTML = `
-    <div class="inv-header">
-      <div class="inv-title">Inventory & Crafting</div>
-      <div class="inv-hint">Press <b>E</b> to close</div>
-    </div>
-    <div class="inv-body">
-      <div class="inv-col">
-        <div class="inv-subtitle">Items</div>
-        <div id="invItems" class="inv-items"></div>
-      </div>
-      <div class="inv-col">
-        <div class="inv-subtitle">Craft / Smelt</div>
-        <div id="invRecipes" class="inv-recipes"></div>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(panel);
-}
-function toggleInventoryPanel(force){
-  ensureInventoryPanel();
-  invOpen = (force !== undefined) ? !!force : !invOpen;
-  const p = document.getElementById("invPanel");
-  if (p) p.style.display = invOpen ? "block" : "none";
-  if (invOpen) renderInventoryPanel();
-}
-function renderInventoryPanel(){
-  const p = document.getElementById("invPanel");
-  if (!p || !invOpen) return;
-  const itemsEl = document.getElementById("invItems");
-  const recEl = document.getElementById("invRecipes");
-  if (!itemsEl || !recEl) return;
-
-  // items list (sorted)
-  const entries = Object.entries(INV).sort((a,b)=>a[0].localeCompare(b[0]));
-  itemsEl.innerHTML = entries.length ? "" : "<div class='inv-empty'>Empty</div>";
-  for (const [code,count] of entries){
-    const row = document.createElement("div");
-    row.className = "inv-item";
-    row.innerHTML = `<span class="inv-code">${code}</span><span class="inv-count">${count}</span>`;
-    itemsEl.appendChild(row);
-  }
-
-  // recipes
-  recEl.innerHTML = "";
-  for (const r of RECIPES){
-    const ok = invHas(r.in);
-    const btn = document.createElement("button");
-    btn.className = "inv-recipe" + (ok ? "" : " disabled");
-    btn.disabled = !ok;
-    const req = r.in.map(([c,n])=>`${c}x${n}`).join(", ");
-    btn.innerHTML = `<div class="inv-recipe-name">${r.name}</div><div class="inv-recipe-req">${req}</div>`;
-    btn.onclick = ()=>{
-      if (!invConsume(r.in)) return;
-      invAdd(r.out[0], r.out[1]);
-      setHint(`Crafted ${r.out[0]}x${r.out[1]}`);
-      playSfx("place", 0.06);
-      swingHotbar();
-    };
-    recEl.appendChild(btn);
-  }
-}
-
 function renderHotbar(){
-  const el = document.getElementById("hotbar");
-  if (!el) return;
-  el.innerHTML = "";
-
-  // Slot layout: 0 pickaxe, 1 shovel, 2 axe, 3-8 blocks
-  const blockPalette = (BLOCKS && BLOCKS.length) ? BLOCKS.slice(0, 12) : [];
-  const blockSlots = [];
-  for (const b of blockPalette){
-    if (blockSlots.length >= 6) break;
-    blockSlots.push({ kind:"block", code:b.code, name:b.name, color:b.color });
-  }
-
-  HOTBAR_ITEMS = [
-    { kind:"tool", code: bestToolCode("pickaxe") || "wooden_pickaxe", display:"Pickaxe", toolType:"pickaxe", tier: (bestToolCode("pickaxe")||"wooden_pickaxe").split("_")[0] },
-    { kind:"tool", code: bestToolCode("shovel")  || "wooden_shovel",  display:"Shovel",  toolType:"shovel",  tier: (bestToolCode("shovel")||"wooden_shovel").split("_")[0] },
-    { kind:"tool", code: bestToolCode("axe")     || "wooden_axe",     display:"Axe",     toolType:"axe",     tier: (bestToolCode("axe")||"wooden_axe").split("_")[0] },
-    ...blockSlots
-  ];
-
+  ui.hotbar.innerHTML = "";
+  // Show unique blocks (no forced repeats). Extra slots stay empty until you add more BLOCKS.
   for (let i=0;i<9;i++){
-    const it = HOTBAR_ITEMS[i];
     const slot = document.createElement("div");
-    slot.className = "slot" + (i===activeSlot ? " active" : "");
-    if (!it){
-      slot.classList.add("empty");
-      el.appendChild(slot);
-      continue;
-    }
-
-    const icon = document.createElement("div");
-    icon.className = "slot-icon";
-
-    if (it.kind === "tool"){
-      // Gray out if you don't actually have the tool
-      const have = invCount(it.code) > 0;
-      icon.textContent = it.code.includes("pickaxe") ? "[PICK]" : it.code.includes("shovel") ? "[SHOVEL]" : "[AXE]";
-      icon.style.opacity = have ? "1" : "0.35";
-      const tierTag = (it.code.split("_")[0] || "wood").toUpperCase();
-      const tag = document.createElement("div");
-      tag.className = "slot-count";
-      tag.textContent = tierTag[0];
-      slot.appendChild(tag);
+    slot.className = "slot" + (i===hotbarIndex ? " active":"");
+    const b = BLOCKS[i];
+    if (b){
+      slot.textContent = b.name;
+      slot.title = `${b.code}`;
+      slot.dataset.code = b.code;
     } else {
-      icon.style.background = `#${(it.color ?? colorFor(it.code)).toString(16).padStart(6,"0")}`;
-      const cnt = invCount(it.code);
-      const countEl = document.createElement("div");
-      countEl.className = "slot-count";
-      countEl.textContent = cnt ? String(cnt) : "";
-      slot.appendChild(countEl);
-      if (!cnt) slot.style.opacity = "0.45";
+      slot.textContent = "";
+      slot.classList.add("empty");
     }
-
-    const label = document.createElement("div");
-    label.className = "slot-label";
-    label.textContent = it.kind === "tool" ? `${it.display} (${it.durLeft ?? it.dur ?? 0})` : (it.name || it.code);
-
-    slot.appendChild(icon);
-    slot.appendChild(label);
-    slot.onclick = ()=>{ activeSlot=i; renderHotbar(); };
-
-    el.appendChild(slot);
+    ui.hotbar.appendChild(slot);
   }
 }
 renderHotbar();
@@ -1329,18 +435,6 @@ window.addEventListener("deviceorientation", (e)=>{
 // =======================
 // PLAYER
 // =======================
-
-// =======================
-// Hunger (light Minecraft-ish)
-let hunger = 20; // 0..20
-let hungerAccum = 0;
-function setHunger(v){
-  hunger = Math.max(0, Math.min(20, v));
-  const el = document.getElementById("hudHunger");
-  if (el) el.style.width = `${(hunger/20)*100}%`;
-}
-function drainHunger(a){ if (a>0) setHunger(hunger - a); }
-
 const player = {
   velocityY: 0,
   grounded: false,
@@ -1364,126 +458,15 @@ function chunkKey(cx, cz){ return `${cx},${cz}`; }
 function worldToChunk(x,z){ return [Math.floor(x/CHUNK), Math.floor(z/CHUNK)]; }
 function blockKey(x,y,z){ return `${x},${y},${z}`; }
 
-
-function biomeAt(x,z){
-  // Simple biomes based on large-scale noise: desert / plains / forest
-  const n = noise2D(x*0.004, z*0.004); // -1..1
-  if (n > 0.35) return "desert";
-  if (n < -0.35) return "forest";
-  return "plains";
-}
-
 function terrainHeight(x,z){
-  // Multi-octave noise terrain (higher peaks, deeper valleys)
-  const n1 = noise2D(x*0.015, z*0.015);   // large features
-  const n2 = noise2D(x*0.05,  z*0.05);    // medium detail
-  const n3 = noise2D(x*0.12,  z*0.12);    // small detail
-  const base = 28;
-  const h = base
-    + Math.floor((n1+1)*24)              // 0..48
-    + Math.floor(n2*10)                  // -10..10
-    + Math.floor(n3*4);                  // -4..4
-  // clamp within reasonable range (client rendering)
-  return Math.max(8, Math.min(96, h));
-}
-
-
-
-function isPlaceableBlock(code){
-  const c = String(code||"");
-  // quick accept for known block palette codes
-  if (["dirt","grass_block","stone","cobblestone","sand","gravel","oak_log","oak_planks","crafting_table","furnace","torch"].includes(c)) return true;
-  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
-  return def ? (def.category === "block") : false;
-}
-
-function isSolidCode(code){
-  return code && code !== "air" && code !== "__air__";
-}
-
-function pickOreByDepth(y){
-  // Depth is negative down to MIN_Y; use Minecraft-ish bands
-  // We'll pick from DB-tagged ores when available, else fallback.
-  const ores = (ORE_CODES && ORE_CODES.length) ? ORE_CODES : [
-    "coal_ore","iron_ore","copper_ore","redstone_ore","lapis_ore","gold_ore","diamond_ore","emerald_ore"
-  ];
-
-  const depth = -y; // deeper => larger
-  // weights by ore type keyword
-  const weighted = [];
-  for (const c of ores){
-    let w = 0.0;
-    const lc = c.toLowerCase();
-    if (lc.includes("coal")) w = 1.0;
-    else if (lc.includes("copper")) w = 0.9;
-    else if (lc.includes("iron")) w = 0.75;
-    else if (lc.includes("redstone")) w = depth > 12 ? 0.55 : 0.15;
-    else if (lc.includes("lapis")) w = depth > 12 ? 0.35 : 0.10;
-    else if (lc.includes("gold")) w = depth > 18 ? 0.25 : 0.05;
-    else if (lc.includes("diamond")) w = depth > 22 ? 0.12 : 0.02;
-    else if (lc.includes("emerald")) w = depth > 26 ? 0.08 : 0.01;
-    else w = 0.05;
-    if (w > 0) weighted.push([c,w]);
-  }
-  // choose
-  let sum = 0; for (const [,w] of weighted) sum += w;
-  let r = Math.random() * sum;
-  for (const [c,w] of weighted){
-    r -= w;
-    if (r <= 0) return c;
-  }
-  return weighted[0]?.[0] || "stone";
-}
-
-
-function caveValue(x,y,z){
-  // Approximate 3D noise using multiple 2D noise slices mixed with y offsets
-  const nA = noise2D(x*CAVE_FREQ + y*0.031, z*CAVE_FREQ - y*0.027);
-  const nB = noise2D(x*CAVE_FREQ*0.7 - y*0.041, z*CAVE_FREQ*0.7 + y*0.033);
-  const nC = noise2D(x*CAVE_FREQ*1.3 + 100.1, z*CAVE_FREQ*1.3 - 77.7);
-  // ridged/tubular feel
-  const ridged = 1.0 - Math.abs(nA);
-  const tubes  = 1.0 - Math.abs(nB);
-  // blend
-  return 0.55*ridged + 0.35*tubes + 0.10*((nC+1)/2);
-}
-function isCaveAir(x,y,z, surfaceY){
-  // Keep a roof: don't carve too close to surface, don't carve at bedrock
-  if (y <= MIN_Y + 2) return false;
-  if (y >= CAVE_END_Y) return false;
-  if (y <= CAVE_START_Y || y < surfaceY - 10){
-    const v = caveValue(x,y,z);
-    // Depth weighting: deeper => slightly more caves
-    const depth = Math.max(0, -y);
-    const t = CAVE_THRESH + Math.min(0.08, depth*0.0015);
-    // Make occasional wider rooms
-    const room = noise2D(x*0.03 + 200, z*0.03 - 200) * 0.5 + 0.5;
-    const roomBoost = (room < 0.18) ? 0.07 : 0.0;
-    return v < (t + roomBoost);
-  }
-  return false;
-}
-
-function getStoneFill(x,y,z){
-  // Default fill for underground stone: sometimes ores by noise + depth.
-  // Use stable noise field so it doesn't "change" every frame.
-  const depth = -y;
-  // ore chance rises a bit with depth but stays rare
-  const baseChance = 0.02 + Math.min(0.06, depth * 0.0015); // ~2% near y=0, up to ~8% deep
-  const n = noise2D(x*0.09, z*0.09) * 0.5 + noise2D(x*0.18 + y*0.03, z*0.18 - y*0.03) * 0.5;
-  const v = (n + 1) / 2; // 0..1
-  if (v < baseChance){
-    return pickOreByDepth(y);
-  }
-  return getStoneFill(x,y,z);
+  // Simple noise-based terrain (0..64)
+  const n = noise2D(x*0.03, z*0.03);
+  const h = 18 + Math.floor((n+1)*10);
+  return h;
 }
 
 function getBlockCode(x,y,z){
-  const edited = getBlockEdit(x,y,z);
-  if (edited !== null) return edited;
-
-    if (y <= MIN_Y) return \"stone\";
-// server/client edits override
+  // server/client edits override
   const [cx, cz] = worldToChunk(x,z);
   const k = chunkKey(cx, cz);
   const map = worldEdits.get(k);
@@ -1495,333 +478,19 @@ function getBlockCode(x,y,z){
 
   const h = terrainHeight(x,z);
   if (y > h) return "air";
-  const biome = biomeAt(x,z);
-  if (y === h){
-    if (biome === "desert") return "sand";
-    return "grass_block";
-  }
-  if (y >= h-3){
-    if (biome === "desert") return "sand";
-    return "dirt";
-  }
-  // Caves: carve underground air pockets/tubes
-  if (isCaveAir(x,y,z,h)) return \"air\";
-  return getStoneFill(x,y,z);
+  if (y === h) return "grass_block";
+  if (y >= h-3) return "dirt";
+  return "stone";
 }
 
 const geom = new THREE.BoxGeometry(1,1,1);
 const materialsByCode = new Map();
-
-// =======================
-// === BLOCK TEXTURES (minecraft-ish) ===
-// Procedural 16x16 pixel textures (no external assets needed)
-const TEX_SIZE = 16;
-const textureCache = new Map(); // key -> THREE.CanvasTexture
-const materialCache2 = new Map(); // code|variant -> THREE.Material or Material[]
-
-function makeCanvasTexture(drawFn, key){
-  if (textureCache.has(key)) return textureCache.get(key);
-  const c = document.createElement("canvas");
-  c.width = TEX_SIZE; c.height = TEX_SIZE;
-  const ctx = c.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-  drawFn(ctx);
-  const tex = new THREE.CanvasTexture(c);
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  textureCache.set(key, tex);
-  return tex;
-}
-
-function rand01(n){
-  // deterministic hash -> 0..1
-  n = (n ^ (n >>> 16)) >>> 0;
-  n = Math.imul(n, 0x7feb352d) >>> 0;
-  n = (n ^ (n >>> 15)) >>> 0;
-  n = Math.imul(n, 0x846ca68b) >>> 0;
-  n = (n ^ (n >>> 16)) >>> 0;
-  return (n >>> 0) / 4294967296;
-}
-
-function px(ctx,x,y,col){ ctx.fillStyle = col; ctx.fillRect(x,y,1,1); }
-
-function tex_grass_top(){
-  return makeCanvasTexture((ctx)=>{
-    // base green with noise speckles
-    ctx.fillStyle = "#3aa655"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let i=0;i<90;i++){
-      const x = (i*7)%TEX_SIZE, y = (i*11)%TEX_SIZE;
-      const r = rand01(i*92821);
-      px(ctx,x,y, r<0.5 ? "rgba(20,90,30,0.35)" : "rgba(90,180,100,0.25)");
-    }
-    // subtle bright flecks
-    for (let i=0;i<24;i++){
-      const x = (i*5+3)%TEX_SIZE, y=(i*9+1)%TEX_SIZE;
-      px(ctx,x,y,"rgba(180,220,180,0.22)");
-    }
-  }, "grass_top");
-}
-function tex_dirt(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.fillStyle="#8b5a2b"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let i=0;i<120;i++){
-      const x=(i*3)%TEX_SIZE, y=(i*13)%TEX_SIZE;
-      const r=rand01(i*112233);
-      px(ctx,x,y, r<0.5 ? "rgba(60,35,15,0.35)" : "rgba(150,95,45,0.25)");
-    }
-  }, "dirt");
-}
-function tex_stone(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.fillStyle="#7a7a7a"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let i=0;i<140;i++){
-      const x=(i*9)%TEX_SIZE, y=(i*5)%TEX_SIZE;
-      const r=rand01(i*998877);
-      px(ctx,x,y, r<0.55 ? "rgba(40,40,40,0.28)" : "rgba(200,200,200,0.18)");
-    }
-  }, "stone");
-}
-
-function tex_planks(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.fillStyle="#b88955"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let y=0;y<TEX_SIZE;y++){
-      const r = rand01(y*991);
-      const shade = r<0.5 ? "rgba(90,50,20,0.22)" : "rgba(240,210,160,0.12)";
-      for (let x=0;x<TEX_SIZE;x+=2) px(ctx,x,y,shade);
-    }
-    // plank seams
-    ctx.fillStyle="rgba(60,35,15,0.35)";
-    ctx.fillRect(0,5,TEX_SIZE,1);
-    ctx.fillRect(0,10,TEX_SIZE,1);
-  }, "planks");
-}
-function tex_crafting_table_top(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.drawImage(tex_planks().image,0,0);
-    ctx.strokeStyle="rgba(40,20,10,0.55)";
-    ctx.lineWidth=1;
-    ctx.strokeRect(1.5,1.5,13,13);
-    ctx.strokeRect(4.5,4.5,7,7);
-  }, "craft_top");
-}
-function tex_furnace(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.fillStyle="#808080"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let i=0;i<130;i++){
-      const x=(i*9)%TEX_SIZE; const y=(i*5)%TEX_SIZE;
-      px(ctx,x,y, (rand01(i*77)<0.55)?"rgba(40,40,40,0.25)":"rgba(220,220,220,0.15)");
-    }
-    // opening
-    ctx.fillStyle="rgba(20,20,20,0.65)";
-    ctx.fillRect(4,7,8,5);
-    ctx.fillStyle="rgba(255,140,40,0.35)";
-    ctx.fillRect(5,10,6,1);
-  }, "furnace");
-}
-function tex_torch(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
-    // stick
-    ctx.fillStyle="rgba(140,90,40,0.9)";
-    ctx.fillRect(7,6,2,9);
-    // flame
-    ctx.fillStyle="rgba(255,190,60,0.85)";
-    ctx.fillRect(6,3,4,4);
-    ctx.fillStyle="rgba(255,255,255,0.7)";
-    ctx.fillRect(7,4,2,2);
-  }, "torch");
-}
-
-function tex_sand(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.fillStyle="#d8cf8a"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
-    for (let i=0;i<90;i++){
-      const x=(i*4)%TEX_SIZE, y=(i*7)%TEX_SIZE;
-      const r=rand01(i*445566);
-      px(ctx,x,y, r<0.6 ? "rgba(170,160,90,0.22)" : "rgba(255,250,210,0.14)");
-    }
-  }, "sand");
-}
-function tex_grass_side(){
-  return makeCanvasTexture((ctx)=>{
-    // dirt base
-    const d = tex_dirt().image;
-    ctx.drawImage(d,0,0);
-    // green overlay band at top with noise
-    ctx.fillStyle="rgba(58,166,85,1)";
-    ctx.fillRect(0,0,TEX_SIZE,6);
-    for (let i=0;i<70;i++){
-      const x=(i*7)%TEX_SIZE, y=(i*3)%6;
-      const r=rand01(i*334455);
-      px(ctx,x,y, r<0.5 ? "rgba(20,90,30,0.25)" : "rgba(120,200,130,0.18)");
-    }
-    // irregular edge pixels downwards
-    for (let i=0;i<30;i++){
-      const x=(i*5+2)%TEX_SIZE;
-      const y=6 + (rand01(i*9911)*3)|0;
-      px(ctx,x,y,"rgba(58,166,85,0.85)");
-    }
-  }, "grass_side");
-}
-function tex_ore(baseTexFn, speckColor, key){
-  return makeCanvasTexture((ctx)=>{
-    ctx.drawImage(baseTexFn().image,0,0);
-    for (let i=0;i<26;i++){
-      const x=(i*5+1)%TEX_SIZE, y=(i*9+3)%TEX_SIZE;
-      px(ctx,x,y, speckColor);
-      if (i%3===0) px(ctx,(x+1)%TEX_SIZE,y, speckColor);
-    }
-  }, key);
-}
-
-function tex_tall_grass(){
-  return makeCanvasTexture((ctx)=>{
-    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
-    // simple pixel blades with alpha
-    for (let i=0;i<28;i++){
-      const x = (i*3)%TEX_SIZE;
-      const h = 7 + ((rand01(i*12345)*8)|0);
-      for (let y=TEX_SIZE-1; y>=TEX_SIZE-h; y--){
-        const a = 0.65 - (TEX_SIZE-1-y)*0.03;
-        px(ctx,x,y, `rgba(70,190,90,${Math.max(0.12,a).toFixed(3)})`);
-        if (rand01(i*777+y*33) < 0.15) px(ctx,(x+1)%TEX_SIZE,y, `rgba(30,120,50,${Math.max(0.10,a-0.15).toFixed(3)})`);
-      }
-    }
-  }, "tall_grass");
-}
-
-function texturedMat(tex, opts={}){
-  const m = new THREE.MeshStandardMaterial({
-    map: tex,
-    transparent: !!opts.transparent,
-    alphaTest: opts.alphaTest ?? (opts.transparent ? 0.35 : 0),
-    side: opts.side ?? THREE.FrontSide
-  });
-  return m;
-}
-
-function grassMaterialArray(){
-  // BoxGeometry groups are: +x, -x, +y, -y, +z, -z
-  const side = texturedMat(tex_grass_side());
-  const top  = texturedMat(tex_grass_top());
-  const bottom = texturedMat(tex_dirt());
-  return [side, side, top, bottom, side, side];
-}
-
-function oreMaterial(code){
-  // Simple mapping by keyword; DB can add more later.
-  const lc = (code||"").toLowerCase();
-  if (lc.includes("coal")) return texturedMat(tex_ore(tex_stone, "rgba(30,30,30,1)", "ore_coal"));
-  if (lc.includes("iron")) return texturedMat(tex_ore(tex_stone, "rgba(210,140,90,1)", "ore_iron"));
-  if (lc.includes("copper")) return texturedMat(tex_ore(tex_stone, "rgba(220,120,70,1)", "ore_copper"));
-  if (lc.includes("gold")) return texturedMat(tex_ore(tex_stone, "rgba(235,205,70,1)", "ore_gold"));
-  if (lc.includes("redstone")) return texturedMat(tex_ore(tex_stone, "rgba(210,40,40,1)", "ore_redstone"));
-  if (lc.includes("lapis")) return texturedMat(tex_ore(tex_stone, "rgba(60,90,210,1)", "ore_lapis"));
-  if (lc.includes("diamond")) return texturedMat(tex_ore(tex_stone, "rgba(60,220,200,1)", "ore_diamond"));
-  if (lc.includes("emerald")) return texturedMat(tex_ore(tex_stone, "rgba(40,200,70,1)", "ore_emerald"));
-  return texturedMat(tex_ore(tex_stone, "rgba(220,220,220,1)", "ore_generic"));
-}
-
 function matFor(code){
-  const key = String(code||"");
-  if (materialCache2.has(key)) return materialCache2.get(key);
-
-  let mat = null;
-
-  if (key === "grass_block"){
-    mat = grassMaterialArray();
-  } else if (key === "dirt"){
-    mat = texturedMat(tex_dirt());
-  } else if (key === "stone" || key === "cobblestone"){
-    mat = texturedMat(tex_stone());
-  } else if (key === "sand"){
-    mat = texturedMat(tex_sand());
-  } else if (key === "oak_planks"){
-    mat = texturedMat(tex_planks());
-  } else if (key === "crafting_table"){
-    const side = texturedMat(tex_planks());
-    const top  = texturedMat(tex_crafting_table_top());
-    mat = [side,side,top,side,side,side];
-  } else if (key === "furnace"){
-    mat = texturedMat(tex_furnace());
-  } else if (key === "torch"){
-    // torch rendered separately (billboard) but keep a fallback material
-    mat = texturedMat(tex_torch(), { transparent:true, alphaTest:0.2, side: THREE.DoubleSide });
-  } else if ((key||"").toLowerCase().includes("ore")){
-    mat = oreMaterial(key);
-  } else {
-    // Fallback: keep existing color system so DB materials still render
-    // If you have a color map already, it will still be used by the rest of the code.
-    mat = new THREE.MeshStandardMaterial({ color: colorFor(key) });
-  }
-
-  materialCache2.set(key, mat);
-  return mat;
-}
-
-
-function shouldPlaceTallGrass(x,y,z){
-  // Deterministic placement per coordinate (no save needed)
-  const n = (x*73856093) ^ (y*19349663) ^ (z*83492791);
-  return rand01(n>>>0) < DECOR_TALL_GRASS_CHANCE;
-}
-
-
-function makeTorchMesh(){
-  const key = "__torch_mat";
-  let mat = materialCache2.get(key);
-  if (!mat){
-    mat = texturedMat(tex_torch(), { transparent:true, alphaTest:0.2, side: THREE.DoubleSide });
-    materialCache2.set(key, mat);
-  }
-  const plane = new THREE.PlaneGeometry(0.5, 0.9);
-  const g = new THREE.Group();
-  const a = new THREE.Mesh(plane, mat);
-  const b = new THREE.Mesh(plane, mat);
-  a.position.y = 0.45; b.position.y = 0.45;
-  a.rotation.y = Math.PI/4;
-  b.rotation.y = -Math.PI/4;
-  g.userData.kind = "decor_torch";
-  g.add(a); g.add(b);
-  return g;
-}
-let torchLights = new Map(); // key -> PointLight
-function ensureTorchLight(x,y,z){
-  const k = blockKey(x,y,z);
-  if (torchLights.has(k)) return;
-  const light = new THREE.PointLight(0xffd27d, 0.85, 10, 2);
-  light.position.set(x+0.5, y+0.8, z+0.5);
-  scene.add(light);
-  torchLights.set(k, light);
-}
-function removeTorchLight(x,y,z){
-  const k = blockKey(x,y,z);
-  const l = torchLights.get(k);
-  if (l){ scene.remove(l); torchLights.delete(k); }
-}
-
-function makeTallGrassMesh(){
-  // crossed planes (like Minecraft)
-  const key = "__tall_grass_mat";
-  let mat = materialCache2.get(key);
-  if (!mat){
-    mat = texturedMat(tex_tall_grass(), { transparent: true, alphaTest: 0.35, side: THREE.DoubleSide });
-    materialCache2.set(key, mat);
-  }
-  const plane = new THREE.PlaneGeometry(1, 1);
-  const g = new THREE.Group();
-  const a = new THREE.Mesh(plane, mat);
-  const b = new THREE.Mesh(plane, mat);
-  a.position.y = 0.5; b.position.y = 0.5;
-  a.rotation.y = Math.PI/4;
-  b.rotation.y = -Math.PI/4;
-  // tag as decor so interactions can treat it as plant
-  a.userData.kind = "decor"; b.userData.kind="decor";
-  g.userData.kind = "decor";
-  g.add(a); g.add(b);
-  return g;
+  if (materialsByCode.has(code)) return materialsByCode.get(code);
+  const def = BLOCKS.find(b=>b.code===code) || { color: 0xaaaaaa };
+  const m = new THREE.MeshStandardMaterial({ color: def.color });
+  materialsByCode.set(code, m);
+  return m;
 }
 
 function buildChunk(cx, cz){
@@ -1837,37 +506,15 @@ function buildChunk(cx, cz){
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
 
-  // Base terrain (procedural + edits) - render ONLY exposed blocks (performance)
+  // Base terrain (procedural + edits that fall within terrain height)
   for (let x=0;x<CHUNK;x++){
     for (let z=0;z<CHUNK;z++){
       const wx = baseX + x;
       const wz = baseZ + z;
       const h = terrainHeight(wx, wz);
-      // render down to MIN_Y, but cull interior blocks
-      for (let y=MIN_Y; y<=h; y++){
+      for (let y=0;y<=h;y++){
         const code = getBlockCode(wx,y,wz);
         if (code === "air") continue;
-
-        if (code === "torch"){
-          const t = makeTorchMesh();
-          t.position.set(wx+0.5, y+0.0, wz+0.5);
-          group.add(t);
-          ensureTorchLight(wx,y,wz);
-          created.add(blockKey(wx,y,wz));
-          continue;
-        }
-
-        // exposure culling: only render if any neighbor is air
-        const exposed =
-          getBlockCode(wx+1,y,wz) === "air" ||
-          getBlockCode(wx-1,y,wz) === "air" ||
-          getBlockCode(wx,y+1,wz) === "air" ||
-          getBlockCode(wx,y-1,wz) === "air" ||
-          getBlockCode(wx,y,wz+1) === "air" ||
-          getBlockCode(wx,y,wz-1) === "air";
-
-        if (!exposed) continue;
-
         const mesh = new THREE.Mesh(geom, matFor(code));
         mesh.castShadow = true;
         mesh.receiveShadow = true;
@@ -1875,15 +522,6 @@ function buildChunk(cx, cz){
         mesh.userData = { x:wx, y, z:wz, code };
         group.add(mesh);
         created.add(blockKey(wx,y,wz));
-
-        // Decorations: tall grass on exposed grass tops (no collision, harvestable)
-        if (code === "grass_block" && getBlockCode(wx,y+1,wz) === "air" && shouldPlaceTallGrass(wx,y,wz)){
-          const plant = makeTallGrassMesh();
-          plant.position.set(wx+0.5, y+1.0, wz+0.5);
-          // subtle random rotation
-          plant.rotation.y = rand01((wx*31 ^ wz*17)>>>0) * Math.PI;
-          group.add(plant);
-        }
       }
     }
   }
@@ -2005,7 +643,6 @@ window.addEventListener("mousedown", async (e)=>{
     const hit = raycastBlock();
     if (!hit) return;
     const { x,y,z } = hit.object.userData;
-    if (y <= MIN_Y) { setHint(\"Too deep - unbreakable layer.\"); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     bumpShake(0.10);
@@ -2020,7 +657,6 @@ window.addEventListener("mousedown", async (e)=>{
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     bumpShake(0.08);
-    swingHotbar();
     playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   }
@@ -2045,7 +681,6 @@ window.addEventListener("touchend", async (e)=>{
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     bumpShake(0.08);
-    swingHotbar();
     playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   } else {
@@ -2248,7 +883,7 @@ function addChatLine(username, msg, ts){
   const line = document.createElement("div");
   line.className = "chat-line";
   const time = ts ? new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
-  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} * ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
+  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} • ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
   chat.messages.appendChild(line);
 
   // Cap + fade older lines (keeps UI clean)
@@ -2476,8 +1111,8 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     loadCachedEdits(worldId);
     subscribeRealtime();
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
-      ? "Left: move * Right: look * Tap: break * Double-tap: place"
-      : "WASD move * Mouse look (click to lock) * Left click: break * Right click: place"));
+      ? "Left: move • Right: look • Tap: break • Double-tap: place"
+      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
 
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
@@ -2498,19 +1133,8 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
 // SIMPLE PHYSICS
 // =======================
 function groundHeightAt(x,z){
-  // Find the highest solid block beneath the player in this column, respecting edits.
-  // Prevents "teleport back to surface" when you dig out a deep shaft.
-  const wx = Math.floor(x);
-  const wz = Math.floor(z);
-  // start scan near player's current feet height
-  const startY = Math.floor(controls.object.position.y);
-  for (let y = startY; y >= MIN_Y; y--){
-    const code = getBlockCode(wx, y, wz);
-    if (code !== "air"){
-      return y + 1.0;
-    }
-  }
-  return MIN_Y + 1.0;
+  // approximate: the terrain height at this position + 1.7 camera height offset handled separately
+  return terrainHeight(Math.floor(x), Math.floor(z)) + 1.0;
 }
 
 // =======================
@@ -2540,111 +1164,10 @@ addEventListener("keydown", (e)=>{
 
 function lerp(a,b,t){ return a + (b-a)*t; }
 
-
-function maybePlayFootsteps(){
-  // Only when moving on ground
-  const now = performance.now();
-  const pos = controls.object.position;
-  const groundY = groundHeightAt(pos.x, pos.z);
-  const onGround = Math.abs(pos.y - groundY) < 0.25;
-  // Estimate horizontal motion by using velocity if present, else use keys state
-  const vx = (window.__velX ?? 0);
-  const vz = (window.__velZ ?? 0);
-  const speed = Math.hypot(vx, vz);
-  if (!onGround || speed < 0.6) return;
-  const sprinting = !!keys["ShiftLeft"] || !!keys["ShiftRight"];
-  const interval = sprinting ? 240 : 320;
-  if (now - lastStepTime < interval) return;
-  lastStepTime = now;
-  const code = surfaceCodeUnderPlayer();
-  playSfx(stepSfxNameFor(code), 0.08);
-}
-
-
-function isFallingBlock(code){ return code === "sand" || code === "gravel"; }
-let fallTickAccum = 0;
-function updateFallingBlocks(dt){
-  fallTickAccum += dt;
-  if (fallTickAccum < 0.15) return;
-  fallTickAccum = 0;
-  const px = Math.floor(controls.object.position.x);
-  const pz = Math.floor(controls.object.position.z);
-  const r = 8;
-  for (let x=px-r; x<=px+r; x++){
-    for (let z=pz-r; z<=pz+r; z++){
-      const top = Math.min(MAX_Y-1, Math.floor(controls.object.position.y) + 12);
-      const bot = Math.max(MIN_Y+2, top - 40);
-      for (let y=top; y>=bot; y--){
-        const c = getBlockCode(x,y,z);
-        if (!isFallingBlock(c)) continue;
-        if (getBlockCode(x,y-1,z) === "air"){
-          setBlockEdit(x,y,z,"air");
-          setBlockEdit(x,y-1,z,c);
-          rebuildChunkAt(x,z);
-          break;
-        }
-      }
-    }
-  }
-}
-
 function animate(){
   requestAnimationFrame(animate);
   const now = performance.now();
   const dt = Math.min(0.05, (now-lastT)/1000);
-
-  // Update block particles
-  updateParticles(dt);
-  maybePlayFootsteps();
-  updateDayNight(dt);
-  updateMobs(dt);
-  updateFurnaces(dt);
-
-  // Update breaking progress (hold-to-break)
-  if (breaking && breakTargetKey && crackOverlay && crackOverlay.visible){
-    // derive position from overlay
-    const bx = Math.floor(crackOverlay.position.x - 0.5);
-    const by = Math.floor(crackOverlay.position.y - 0.5);
-    const bz = Math.floor(crackOverlay.position.z - 0.5);
-
-    breakProgress = Math.min(1, breakProgress + (dt*1000) / breakTimeMs);
-    const stage = Math.min(9, Math.floor(breakProgress * 10));
-    setCrackStage(stage);
-
-    if (breakProgress >= 1){
-      // Actually remove block now
-      const code = getBlockCode(bx,by,bz);
-      // Don't break air or unbreakable
-      if (code !== "air" && by > MIN_Y){
-        const tool = getActiveItem();
-        const harvestOk = canHarvestBlock(code, tool);
-        const dropped = harvestOk ? dropForBlock(code) : null;
-        if (code === "torch") removeTorchLight(bx,by,bz);
-        setBlockEdit(bx,by,bz,"air");
-        swingHotbar();
-        playSfx("break", 0.14);
-        bumpShake(0.06);
-        spawnBlockParticles(bx,by,bz, code);
-        if (!harvestOk){
-          setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) - dropped nothing.`);
-        } else {
-          invAdd(dropped, 1);
-          setHint(`Picked up: ${dropped}`);
-        }
-
-        rebuildChunkAt(bx,bz);
-        // also rebuild neighbors
-        rebuildChunkAt(bx+1,bz);
-        rebuildChunkAt(bx-1,bz);
-        rebuildChunkAt(bx,bz+1);
-        rebuildChunkAt(bx,bz-1);
-      }
-      hideCrack();
-    }
-  } else {
-    // If not holding, ensure we aren't showing stale crack overlay
-    // (mouseup handler also hides)
-  }
   lastT = now;
 
   // Day/Night visual cycle
@@ -2734,14 +1257,11 @@ function animate(){
     player.velocityY = player.jump;
     player.grounded = false;
     bumpShake(0.14);
-    swingHotbar();
     playSfx("jump");
   }
 
   // Head bob + FOV sprint kick
   const speed = Math.hypot(player.vx, player.vz);
-  if (sprint && player.grounded && speed>1.2){ hungerAccum += dt; if (hungerAccum>1.0){ drainHunger(1); hungerAccum=0; } }
-
   const bobAmt = player.grounded ? Math.min(1, speed / 6) : 0;
   const bob = Math.sin(now * 0.018) * 0.06 * bobAmt;
   // camera is the control object here; apply bob as a small additive offset
@@ -2799,9 +1319,7 @@ if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
 
 
 function getSelectedWorldSlug(){
-  const active = getActiveItem();
-    if (active.kind === "tool"){ setHint("You are holding a tool - select a block to place."); return; }
-    const sel = document.getElementById('world-select');
+  const sel = document.getElementById('world-select');
   const slug = (sel?.value || worldSlug || 'overworld');
   worldSlug = slug;
   localStorage.setItem('kidcraft_world', slug);
@@ -2934,22 +1452,4 @@ function startMobTickerIfAllowed(){
 // Pointer lock errors can happen if user cancels quickly; avoid noisy console.
 document.addEventListener("pointerlockerror", () => {
   if (!isMobile()) setHint("Click to lock mouse. (If it fails, try clicking again.)");
-});
-
-function colorFor(code){
-  const h = [...String(code)].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7);
-  const r = 60 + (h & 127);
-  const g = 60 + ((h>>>7) & 127);
-  const b = 60 + ((h>>>14) & 127);
-  return (r<<16) | (g<<8) | b;
-}
-
-window.addEventListener("mouseup", (e)=>{ if (e.button===0){ breaking=false; hideCrack(); } });
-
-window.addEventListener("keydown", (e)=>{
-  if (e.code === "KeyE"){
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return;
-    toggleInventoryPanel();
-  }
 });
