@@ -1336,3 +1336,76 @@ create policy "recipe_ingredients_select" on public.recipe_ingredients for selec
 drop policy if exists "mobs_select" on public.mobs;
 create policy "mobs_select" on public.mobs for select to authenticated using (true);
 
+
+
+-- =========================
+-- Minecraft-ish crafting / smelting (DB-driven)
+-- =========================
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipes (
+  id bigserial PRIMARY KEY,
+  name text NOT NULL,
+  station text NOT NULL DEFAULT 'inventory',
+  output_code text NOT NULL,
+  output_qty int NOT NULL DEFAULT 1,
+  enabled boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipe_ingredients (
+  recipe_id bigint NOT NULL REFERENCES public.kidcraft_recipes(id) ON DELETE CASCADE,
+  input_code text NOT NULL,
+  qty int NOT NULL DEFAULT 1,
+  PRIMARY KEY (recipe_id, input_code)
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_smelting_recipes (
+  id bigserial PRIMARY KEY,
+  name text NOT NULL,
+  input_code text NOT NULL,
+  output_code text NOT NULL,
+  output_qty int NOT NULL DEFAULT 1,
+  cook_time_ms int NOT NULL DEFAULT 6000,
+  enabled boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_player_inventory (
+  user_id uuid PRIMARY KEY,
+  items jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_world_block_edits (
+  world_id uuid NOT NULL,
+  x int NOT NULL,
+  y int NOT NULL,
+  z int NOT NULL,
+  code text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (world_id, x, y, z)
+);
+
+ALTER TABLE public.kidcraft_player_inventory ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='inv_owner_rw') THEN
+    CREATE POLICY inv_owner_rw ON public.kidcraft_player_inventory
+      FOR ALL TO authenticated
+      USING (auth.uid() = user_id)
+      WITH CHECK (auth.uid() = user_id);
+  END IF;
+END$$;
+
+ALTER TABLE public.kidcraft_world_block_edits ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_read') THEN
+    CREATE POLICY world_edits_read ON public.kidcraft_world_block_edits
+      FOR SELECT TO anon, authenticated
+      USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_write_auth') THEN
+    CREATE POLICY world_edits_write_auth ON public.kidcraft_world_block_edits
+      FOR INSERT, UPDATE TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END$$;

@@ -1342,3 +1342,124 @@ create policy "recipe_ingredients_select" on public.recipe_ingredients for selec
 drop policy if exists "mobs_select" on public.mobs;
 create policy "mobs_select" on public.mobs for select to authenticated using (true);
 
+
+
+-- =========================
+-- Minecraft-ish crafting / smelting (DB-driven)
+-- =========================
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipes (
+  id bigserial PRIMARY KEY,
+  name text NOT NULL,
+  station text NOT NULL DEFAULT 'inventory',
+  output_code text NOT NULL,
+  output_qty int NOT NULL DEFAULT 1,
+  enabled boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipe_ingredients (
+  recipe_id bigint NOT NULL REFERENCES public.kidcraft_recipes(id) ON DELETE CASCADE,
+  input_code text NOT NULL,
+  qty int NOT NULL DEFAULT 1,
+  PRIMARY KEY (recipe_id, input_code)
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_smelting_recipes (
+  id bigserial PRIMARY KEY,
+  name text NOT NULL,
+  input_code text NOT NULL,
+  output_code text NOT NULL,
+  output_qty int NOT NULL DEFAULT 1,
+  cook_time_ms int NOT NULL DEFAULT 6000,
+  enabled boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_player_inventory (
+  user_id uuid PRIMARY KEY,
+  items jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_world_block_edits (
+  world_id uuid NOT NULL,
+  x int NOT NULL,
+  y int NOT NULL,
+  z int NOT NULL,
+  code text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (world_id, x, y, z)
+);
+
+ALTER TABLE public.kidcraft_player_inventory ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='inv_owner_rw') THEN
+    CREATE POLICY inv_owner_rw ON public.kidcraft_player_inventory
+      FOR ALL TO authenticated
+      USING (auth.uid() = user_id)
+      WITH CHECK (auth.uid() = user_id);
+  END IF;
+END$$;
+
+ALTER TABLE public.kidcraft_world_block_edits ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_read') THEN
+    CREATE POLICY world_edits_read ON public.kidcraft_world_block_edits
+      FOR SELECT TO anon, authenticated
+      USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname='world_edits_write_auth') THEN
+    CREATE POLICY world_edits_write_auth ON public.kidcraft_world_block_edits
+      FOR INSERT, UPDATE TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END$$;
+
+
+-- Seed starter recipes (shape-less, quantity-based)
+INSERT INTO public.kidcraft_recipes (name, station, output_code, output_qty) VALUES
+('Oak Planks', 'inventory', 'oak_planks', 4),
+('Stick', 'inventory', 'stick', 4),
+('Crafting Table', 'inventory', 'crafting_table', 1),
+('Furnace', 'crafting_table', 'furnace', 1),
+('Wood Pickaxe', 'crafting_table', 'wooden_pickaxe', 1),
+('Wood Shovel', 'crafting_table', 'wooden_shovel', 1),
+('Wood Axe', 'crafting_table', 'wooden_axe', 1),
+('Stone Pickaxe', 'crafting_table', 'stone_pickaxe', 1),
+('Stone Shovel', 'crafting_table', 'stone_shovel', 1),
+('Stone Axe', 'crafting_table', 'stone_axe', 1),
+('Torch', 'inventory', 'torch', 4)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.kidcraft_recipe_ingredients (recipe_id, input_code, qty)
+SELECT r.id, v.input_code, v.qty
+FROM public.kidcraft_recipes r
+JOIN (VALUES
+  ('Oak Planks','oak_log',1),
+  ('Stick','oak_planks',2),
+  ('Crafting Table','oak_planks',4),
+  ('Furnace','cobblestone',8),
+  ('Wood Pickaxe','oak_planks',3),
+  ('Wood Pickaxe','stick',2),
+  ('Wood Shovel','oak_planks',1),
+  ('Wood Shovel','stick',2),
+  ('Wood Axe','oak_planks',3),
+  ('Wood Axe','stick',2),
+  ('Stone Pickaxe','cobblestone',3),
+  ('Stone Pickaxe','stick',2),
+  ('Stone Shovel','cobblestone',1),
+  ('Stone Shovel','stick',2),
+  ('Stone Axe','cobblestone',3),
+  ('Stone Axe','stick',2),
+  ('Torch','coal',1),
+  ('Torch','stick',1)
+) AS v(recipe_name, input_code, qty)
+ON r.name = v.recipe_name
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.kidcraft_smelting_recipes (name, input_code, output_code, output_qty, cook_time_ms) VALUES
+('Smelt Raw Iron', 'raw_iron', 'iron_ingot', 1, 6000),
+('Smelt Raw Copper', 'raw_copper', 'copper_ingot', 1, 6000),
+('Smelt Raw Gold', 'raw_gold', 'gold_ingot', 1, 6000)
+ON CONFLICT DO NOTHING;
