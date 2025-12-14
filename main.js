@@ -15,6 +15,17 @@ const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
+// Vertical world limits (Minecraft-ish feel)
+const MIN_Y = -32;      // bottom "bedrock-ish" depth (unbreakable layer at MIN_Y)
+const MAX_Y = 160;      // soft cap used for ore/noise math (rendered by exposure culling)
+
+// Cave generation (client-side procedural)
+const CAVE_START_Y = 8;      // below this (and down into negatives) caves can appear
+const CAVE_END_Y   = 60;     // above this, caves stop (keeps surface solid)
+const CAVE_FREQ    = 0.09;   // cave noise frequency
+const CAVE_THRESH  = 0.16;   // lower => more caves
+const CAVE_TUBE    = 0.10;   // tube strength
+
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
 const ENABLE_GUEST_BUTTON = true;
 
@@ -22,6 +33,9 @@ const ENABLE_GUEST_BUTTON = true;
 // SUPABASE
 // =======================
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Load material list (blocks/ores) from DB to drive palette + world variety
+loadMaterialsFromDB();
 
 /* =======================
    PROFILE + USERNAME (created in-game)
@@ -110,8 +124,30 @@ ui.signup.onclick = async () => {
   if (p.length < 6) return setStatus("Password must be at least 6 characters.");
   savePreferredUsername(u);
   if (ui.username) ui.username.value = u;
-  const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
-  setStatus(error ? error.message : "Signed up. Now log in.");
+
+  // Guarantee: only log in after a successful account creation.
+  setStatus("Creating account...");
+  const res = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
+
+  if (res?.error) {
+    console.warn("[Auth] signUp error:", res.error);
+    const msg = (res.error.message || "").toLowerCase();
+
+    // If user already exists, don't log in automatically (you asked for account creation first).
+    if (msg.includes("already") || msg.includes("exists") || res.error.status === 422) {
+      return setStatus("Account already exists. Click Log in instead.");
+    }
+    return setStatus(res.error.message || "Sign up failed.");
+  }
+
+  // At this point Supabase has created the user. Now we can log in.
+  setStatus("Account created. Logging in...");
+  const li = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
+  if (li?.error) {
+    console.warn("[Auth] signIn after signup error:", li.error);
+    return setStatus("Account created. Please click Log in.");
+  }
+  setStatus("Logged in.");
 };
 
 ui.login.onclick = async () => {
@@ -155,6 +191,68 @@ const BLOCKS = [
   { code: "sand", name: "Sand", color: 0xd7c87a },
   { code: "oak_planks", name: "Planks", color: 0xa06b2d },
 ];
+
+// === Materials loaded from database (optional) ===
+let MATERIAL_DEFS = [];           // full list of block materials from DB
+let ORE_CODES = [];              // codes tagged 'ore'
+let COMMON_BLOCKS = [];          // curated list for hotbar
+let MATERIALS_READY = false;
+
+function hashColor(code){
+  // deterministic pleasing color for materials lacking explicit color props
+  const h = [...code].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7) % 360;
+  const s = 0.35;
+  const l = 0.55;
+  const [r,g,b] = colorsys.hls_to_rgb(h/360, l, s);
+  return ((int(r*255)&255)<<16) | ((int(g*255)&255)<<8) | (int(b*255)&255);
+}
+// tiny int helper (avoid Math.floor in hot path for color build)
+function int(x){ return x|0; }
+
+function pickCommonHotbar(materials){
+  const want = ["grass_block","dirt","stone","cobblestone","sand","oak_planks","oak_log","gravel","torch"];
+  const byCode = new Map(materials.map(m=>[m.code,m]));
+  const out = [];
+  for (const c of want){
+    const v = byCode.get(c);
+    if (v) out.push({ code: v.code, name: v.display_name, color: hashColor(v.code) });
+  }
+  // Fill remaining with other natural/wood blocks (non-ore) to 9 slots
+  const fallback = materials.filter(m=>m.tags?.includes("natural") || m.tags?.includes("wood") || m.tags?.includes("solid"))
+                            .filter(m=>!m.tags?.includes("ore") && m.code!=="air");
+  for (const mdef of fallback){
+    if (out.length>=9) break;
+    if (out.some(x=>x.code===mdef.code)) continue;
+    out.push({ code: mdef.code, name: mdef.display_name, color: hashColor(mdef.code) });
+  }
+  return out.slice(0,9);
+}
+
+async function loadMaterialsFromDB(){
+  try{
+    const { data, error } = await supabase
+      .from("materials")
+      .select("code, display_name, category, tags, hardness, props")
+      .eq("category","block")
+      .limit(5000);
+    if (error) { console.warn("[Materials] load failed:", error.message); return; }
+    MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
+    ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
+    COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
+    // If we found a decent set, replace BLOCKS used by hotbar/material palette.
+    if (COMMON_BLOCKS.length >= 5){
+      BLOCKS.length = 0;
+      for (const b of COMMON_BLOCKS) BLOCKS.push(b);
+      renderHotbar();
+    }
+    MATERIALS_READY = true;
+    console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
+  }catch(e){
+    console.warn("[Materials] load exception:", e);
+  }
+}
+
+
 
 // =======================
 // THREE.JS SETUP
@@ -220,6 +318,146 @@ document.body.addEventListener("click", () => {
 });
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+
+
+// =======================
+// === BLOCK BREAK FX (Minecraft-ish) ===
+let breakTargetKey = null;
+let breakProgress = 0;          // 0..1
+let breaking = false;
+let breakHoldStart = 0;
+let crackOverlay = null;
+let crackMat = null;
+const BREAK_TIME_MS = 520;      // time to fully break a block when holding click
+
+function tex_crack(stage){
+  // stage 0..9
+  const key = "crack_"+stage;
+  return makeCanvasTexture((ctx)=>{
+    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    // deterministic pseudo-random crack lines per stage
+    for (let i=0;i<stage*2+2;i++){
+      const x0 = (i*3 + stage*5) % TEX_SIZE;
+      const y0 = (i*7 + stage*9) % TEX_SIZE;
+      const x1 = (x0 + 6 + (i%3)*3) % TEX_SIZE;
+      const y1 = (y0 + 4 + (i%4)*2) % TEX_SIZE;
+      ctx.beginPath();
+      ctx.moveTo(x0+0.5, y0+0.5);
+      ctx.lineTo(x1+0.5, y1+0.5);
+      ctx.stroke();
+    }
+    // sprinkle pixels
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    for (let i=0;i<stage*8;i++){
+      const x = (i*11 + stage*13) % TEX_SIZE;
+      const y = (i*5  + stage*17) % TEX_SIZE;
+      ctx.fillRect(x,y,1,1);
+    }
+  }, key);
+}
+
+function ensureCrackOverlay(){
+  if (crackOverlay) return;
+  crackMat = texturedMat(tex_crack(0), { transparent: true, alphaTest: 0.05, side: THREE.DoubleSide });
+  crackMat.depthTest = true;
+  crackMat.depthWrite = false;
+  crackMat.polygonOffset = true;
+  crackMat.polygonOffsetFactor = -1;
+  crackMat.polygonOffsetUnits = -1;
+
+  const g = new THREE.BoxGeometry(1.02, 1.02, 1.02);
+  crackOverlay = new THREE.Mesh(g, crackMat);
+  crackOverlay.visible = false;
+  crackOverlay.renderOrder = 999;
+  scene.add(crackOverlay);
+}
+
+function setCrackStage(stage){
+  ensureCrackOverlay();
+  stage = Math.max(0, Math.min(9, stage|0));
+  const tex = tex_crack(stage);
+  crackMat.map = tex;
+  crackMat.needsUpdate = true;
+}
+
+function showCrackAt(x,y,z){
+  ensureCrackOverlay();
+  crackOverlay.visible = true;
+  crackOverlay.position.set(x+0.5, y+0.5, z+0.5);
+}
+
+function hideCrack(){
+  if (!crackOverlay) return;
+  crackOverlay.visible = false;
+  breakTargetKey = null;
+  breakProgress = 0;
+  breaking = false;
+}
+
+function spawnBlockParticles(x,y,z, baseCode){
+  // simple burst of small quads; purely visual, no collision
+  const count = 10 + ((Math.random()*6)|0);
+  const group = new THREE.Group();
+  const tex = (()=>{
+    if (baseCode==="grass_block") return tex_grass_top();
+    if (baseCode==="dirt") return tex_dirt();
+    if (baseCode==="sand") return tex_sand();
+    if (baseCode==="stone" || baseCode==="cobblestone") return tex_stone();
+    return null;
+  })();
+  const mat = tex ? texturedMat(tex, { transparent: true, alphaTest: 0.15, side: THREE.DoubleSide }) :
+                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
+
+  const geo = new THREE.PlaneGeometry(0.14, 0.14);
+  const now = performance.now();
+  group.userData.birth = now;
+  group.userData.parts = [];
+
+  for (let i=0;i<count;i++){
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x+0.5, y+0.5, z+0.5);
+    m.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+    const vel = new THREE.Vector3(
+      (Math.random()-0.5)*1.6,
+      1.0 + Math.random()*1.6,
+      (Math.random()-0.5)*1.6
+    );
+    group.userData.parts.push({ mesh: m, vel });
+    group.add(m);
+  }
+  scene.add(group);
+
+  // add to a global list for update in animate
+  if (!window.__particleBursts) window.__particleBursts = [];
+  window.__particleBursts.push(group);
+}
+
+function updateParticles(dt){
+  const arr = window.__particleBursts;
+  if (!arr || !arr.length) return;
+  for (let i=arr.length-1;i>=0;i--){
+    const g = arr[i];
+    const age = (performance.now() - g.userData.birth) / 1000;
+    if (age > 0.7){
+      scene.remove(g);
+      arr.splice(i,1);
+      continue;
+    }
+    for (const p of g.userData.parts){
+      p.vel.y -= 5.5 * dt; // gravity
+      p.mesh.position.addScaledVector(p.vel, dt);
+      p.mesh.rotation.x += 2.0*dt;
+      p.mesh.rotation.y += 1.6*dt;
+      // fade out
+      if (p.mesh.material && p.mesh.material.opacity !== undefined){
+        p.mesh.material.opacity = Math.max(0, 0.85 - age*1.1);
+      }
+    }
+  }
 }
 
 // =======================
@@ -460,14 +698,104 @@ function worldToChunk(x,z){ return [Math.floor(x/CHUNK), Math.floor(z/CHUNK)]; }
 function blockKey(x,y,z){ return `${x},${y},${z}`; }
 
 function terrainHeight(x,z){
-  // Simple noise-based terrain (0..64)
-  const n = noise2D(x*0.03, z*0.03);
-  const h = 18 + Math.floor((n+1)*10);
-  return h;
+  // Multi-octave noise terrain (higher peaks, deeper valleys)
+  const n1 = noise2D(x*0.015, z*0.015);   // large features
+  const n2 = noise2D(x*0.05,  z*0.05);    // medium detail
+  const n3 = noise2D(x*0.12,  z*0.12);    // small detail
+  const base = 28;
+  const h = base
+    + Math.floor((n1+1)*24)              // 0..48
+    + Math.floor(n2*10)                  // -10..10
+    + Math.floor(n3*4);                  // -4..4
+  // clamp within reasonable range (client rendering)
+  return Math.max(8, Math.min(96, h));
+}
+
+
+function isSolidCode(code){
+  return code && code !== "air" && code !== "__air__";
+}
+
+function pickOreByDepth(y){
+  // Depth is negative down to MIN_Y; use Minecraft-ish bands
+  // We'll pick from DB-tagged ores when available, else fallback.
+  const ores = (ORE_CODES && ORE_CODES.length) ? ORE_CODES : [
+    "coal_ore","iron_ore","copper_ore","redstone_ore","lapis_ore","gold_ore","diamond_ore","emerald_ore"
+  ];
+
+  const depth = -y; // deeper => larger
+  // weights by ore type keyword
+  const weighted = [];
+  for (const c of ores){
+    let w = 0.0;
+    const lc = c.toLowerCase();
+    if (lc.includes("coal")) w = 1.0;
+    else if (lc.includes("copper")) w = 0.9;
+    else if (lc.includes("iron")) w = 0.75;
+    else if (lc.includes("redstone")) w = depth > 12 ? 0.55 : 0.15;
+    else if (lc.includes("lapis")) w = depth > 12 ? 0.35 : 0.10;
+    else if (lc.includes("gold")) w = depth > 18 ? 0.25 : 0.05;
+    else if (lc.includes("diamond")) w = depth > 22 ? 0.12 : 0.02;
+    else if (lc.includes("emerald")) w = depth > 26 ? 0.08 : 0.01;
+    else w = 0.05;
+    if (w > 0) weighted.push([c,w]);
+  }
+  // choose
+  let sum = 0; for (const [,w] of weighted) sum += w;
+  let r = Math.random() * sum;
+  for (const [c,w] of weighted){
+    r -= w;
+    if (r <= 0) return c;
+  }
+  return weighted[0]?.[0] || "stone";
+}
+
+
+function caveValue(x,y,z){
+  // Approximate 3D noise using multiple 2D noise slices mixed with y offsets
+  const nA = noise2D(x*CAVE_FREQ + y*0.031, z*CAVE_FREQ - y*0.027);
+  const nB = noise2D(x*CAVE_FREQ*0.7 - y*0.041, z*CAVE_FREQ*0.7 + y*0.033);
+  const nC = noise2D(x*CAVE_FREQ*1.3 + 100.1, z*CAVE_FREQ*1.3 - 77.7);
+  // ridged/tubular feel
+  const ridged = 1.0 - Math.abs(nA);
+  const tubes  = 1.0 - Math.abs(nB);
+  // blend
+  return 0.55*ridged + 0.35*tubes + 0.10*((nC+1)/2);
+}
+function isCaveAir(x,y,z, surfaceY){
+  // Keep a roof: don't carve too close to surface, don't carve at bedrock
+  if (y <= MIN_Y + 2) return false;
+  if (y >= CAVE_END_Y) return false;
+  if (y <= CAVE_START_Y || y < surfaceY - 10){
+    const v = caveValue(x,y,z);
+    // Depth weighting: deeper => slightly more caves
+    const depth = Math.max(0, -y);
+    const t = CAVE_THRESH + Math.min(0.08, depth*0.0015);
+    // Make occasional wider rooms
+    const room = noise2D(x*0.03 + 200, z*0.03 - 200) * 0.5 + 0.5;
+    const roomBoost = (room < 0.18) ? 0.07 : 0.0;
+    return v < (t + roomBoost);
+  }
+  return false;
+}
+
+function getStoneFill(x,y,z){
+  // Default fill for underground stone: sometimes ores by noise + depth.
+  // Use stable noise field so it doesn't "change" every frame.
+  const depth = -y;
+  // ore chance rises a bit with depth but stays rare
+  const baseChance = 0.02 + Math.min(0.06, depth * 0.0015); // ~2% near y=0, up to ~8% deep
+  const n = noise2D(x*0.09, z*0.09) * 0.5 + noise2D(x*0.18 + y*0.03, z*0.18 - y*0.03) * 0.5;
+  const v = (n + 1) / 2; // 0..1
+  if (v < baseChance){
+    return pickOreByDepth(y);
+  }
+  return getStoneFill(x,y,z);
 }
 
 function getBlockCode(x,y,z){
-  // server/client edits override
+    if (y <= MIN_Y) return \"stone\";
+// server/client edits override
   const [cx, cz] = worldToChunk(x,z);
   const k = chunkKey(cx, cz);
   const map = worldEdits.get(k);
@@ -481,17 +809,227 @@ function getBlockCode(x,y,z){
   if (y > h) return "air";
   if (y === h) return "grass_block";
   if (y >= h-3) return "dirt";
-  return "stone";
+  // Caves: carve underground air pockets/tubes
+  if (isCaveAir(x,y,z,h)) return \"air\";
+  return getStoneFill(x,y,z);
 }
 
 const geom = new THREE.BoxGeometry(1,1,1);
 const materialsByCode = new Map();
-function matFor(code){
-  if (materialsByCode.has(code)) return materialsByCode.get(code);
-  const def = BLOCKS.find(b=>b.code===code) || { color: 0xaaaaaa };
-  const m = new THREE.MeshStandardMaterial({ color: def.color });
-  materialsByCode.set(code, m);
+
+// =======================
+// === BLOCK TEXTURES (minecraft-ish) ===
+// Procedural 16x16 pixel textures (no external assets needed)
+const TEX_SIZE = 16;
+const textureCache = new Map(); // key -> THREE.CanvasTexture
+const materialCache2 = new Map(); // code|variant -> THREE.Material or Material[]
+
+function makeCanvasTexture(drawFn, key){
+  if (textureCache.has(key)) return textureCache.get(key);
+  const c = document.createElement("canvas");
+  c.width = TEX_SIZE; c.height = TEX_SIZE;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  drawFn(ctx);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  textureCache.set(key, tex);
+  return tex;
+}
+
+function rand01(n){
+  // deterministic hash -> 0..1
+  n = (n ^ (n >>> 16)) >>> 0;
+  n = Math.imul(n, 0x7feb352d) >>> 0;
+  n = (n ^ (n >>> 15)) >>> 0;
+  n = Math.imul(n, 0x846ca68b) >>> 0;
+  n = (n ^ (n >>> 16)) >>> 0;
+  return (n >>> 0) / 4294967296;
+}
+
+function px(ctx,x,y,col){ ctx.fillStyle = col; ctx.fillRect(x,y,1,1); }
+
+function tex_grass_top(){
+  return makeCanvasTexture((ctx)=>{
+    // base green with noise speckles
+    ctx.fillStyle = "#3aa655"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let i=0;i<90;i++){
+      const x = (i*7)%TEX_SIZE, y = (i*11)%TEX_SIZE;
+      const r = rand01(i*92821);
+      px(ctx,x,y, r<0.5 ? "rgba(20,90,30,0.35)" : "rgba(90,180,100,0.25)");
+    }
+    // subtle bright flecks
+    for (let i=0;i<24;i++){
+      const x = (i*5+3)%TEX_SIZE, y=(i*9+1)%TEX_SIZE;
+      px(ctx,x,y,"rgba(180,220,180,0.22)");
+    }
+  }, "grass_top");
+}
+function tex_dirt(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.fillStyle="#8b5a2b"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let i=0;i<120;i++){
+      const x=(i*3)%TEX_SIZE, y=(i*13)%TEX_SIZE;
+      const r=rand01(i*112233);
+      px(ctx,x,y, r<0.5 ? "rgba(60,35,15,0.35)" : "rgba(150,95,45,0.25)");
+    }
+  }, "dirt");
+}
+function tex_stone(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.fillStyle="#7a7a7a"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let i=0;i<140;i++){
+      const x=(i*9)%TEX_SIZE, y=(i*5)%TEX_SIZE;
+      const r=rand01(i*998877);
+      px(ctx,x,y, r<0.55 ? "rgba(40,40,40,0.28)" : "rgba(200,200,200,0.18)");
+    }
+  }, "stone");
+}
+function tex_sand(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.fillStyle="#d8cf8a"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let i=0;i<90;i++){
+      const x=(i*4)%TEX_SIZE, y=(i*7)%TEX_SIZE;
+      const r=rand01(i*445566);
+      px(ctx,x,y, r<0.6 ? "rgba(170,160,90,0.22)" : "rgba(255,250,210,0.14)");
+    }
+  }, "sand");
+}
+function tex_grass_side(){
+  return makeCanvasTexture((ctx)=>{
+    // dirt base
+    const d = tex_dirt().image;
+    ctx.drawImage(d,0,0);
+    // green overlay band at top with noise
+    ctx.fillStyle="rgba(58,166,85,1)";
+    ctx.fillRect(0,0,TEX_SIZE,6);
+    for (let i=0;i<70;i++){
+      const x=(i*7)%TEX_SIZE, y=(i*3)%6;
+      const r=rand01(i*334455);
+      px(ctx,x,y, r<0.5 ? "rgba(20,90,30,0.25)" : "rgba(120,200,130,0.18)");
+    }
+    // irregular edge pixels downwards
+    for (let i=0;i<30;i++){
+      const x=(i*5+2)%TEX_SIZE;
+      const y=6 + (rand01(i*9911)*3)|0;
+      px(ctx,x,y,"rgba(58,166,85,0.85)");
+    }
+  }, "grass_side");
+}
+function tex_ore(baseTexFn, speckColor, key){
+  return makeCanvasTexture((ctx)=>{
+    ctx.drawImage(baseTexFn().image,0,0);
+    for (let i=0;i<26;i++){
+      const x=(i*5+1)%TEX_SIZE, y=(i*9+3)%TEX_SIZE;
+      px(ctx,x,y, speckColor);
+      if (i%3===0) px(ctx,(x+1)%TEX_SIZE,y, speckColor);
+    }
+  }, key);
+}
+
+function tex_tall_grass(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
+    // simple pixel blades with alpha
+    for (let i=0;i<28;i++){
+      const x = (i*3)%TEX_SIZE;
+      const h = 7 + ((rand01(i*12345)*8)|0);
+      for (let y=TEX_SIZE-1; y>=TEX_SIZE-h; y--){
+        const a = 0.65 - (TEX_SIZE-1-y)*0.03;
+        px(ctx,x,y, `rgba(70,190,90,${Math.max(0.12,a).toFixed(3)})`);
+        if (rand01(i*777+y*33) < 0.15) px(ctx,(x+1)%TEX_SIZE,y, `rgba(30,120,50,${Math.max(0.10,a-0.15).toFixed(3)})`);
+      }
+    }
+  }, "tall_grass");
+}
+
+function texturedMat(tex, opts={}){
+  const m = new THREE.MeshStandardMaterial({
+    map: tex,
+    transparent: !!opts.transparent,
+    alphaTest: opts.alphaTest ?? (opts.transparent ? 0.35 : 0),
+    side: opts.side ?? THREE.FrontSide
+  });
   return m;
+}
+
+function grassMaterialArray(){
+  // BoxGeometry groups are: +x, -x, +y, -y, +z, -z
+  const side = texturedMat(tex_grass_side());
+  const top  = texturedMat(tex_grass_top());
+  const bottom = texturedMat(tex_dirt());
+  return [side, side, top, bottom, side, side];
+}
+
+function oreMaterial(code){
+  // Simple mapping by keyword; DB can add more later.
+  const lc = (code||"").toLowerCase();
+  if (lc.includes("coal")) return texturedMat(tex_ore(tex_stone, "rgba(30,30,30,1)", "ore_coal"));
+  if (lc.includes("iron")) return texturedMat(tex_ore(tex_stone, "rgba(210,140,90,1)", "ore_iron"));
+  if (lc.includes("copper")) return texturedMat(tex_ore(tex_stone, "rgba(220,120,70,1)", "ore_copper"));
+  if (lc.includes("gold")) return texturedMat(tex_ore(tex_stone, "rgba(235,205,70,1)", "ore_gold"));
+  if (lc.includes("redstone")) return texturedMat(tex_ore(tex_stone, "rgba(210,40,40,1)", "ore_redstone"));
+  if (lc.includes("lapis")) return texturedMat(tex_ore(tex_stone, "rgba(60,90,210,1)", "ore_lapis"));
+  if (lc.includes("diamond")) return texturedMat(tex_ore(tex_stone, "rgba(60,220,200,1)", "ore_diamond"));
+  if (lc.includes("emerald")) return texturedMat(tex_ore(tex_stone, "rgba(40,200,70,1)", "ore_emerald"));
+  return texturedMat(tex_ore(tex_stone, "rgba(220,220,220,1)", "ore_generic"));
+}
+
+function matFor(code){
+  const key = String(code||"");
+  if (materialCache2.has(key)) return materialCache2.get(key);
+
+  let mat = null;
+
+  if (key === "grass_block"){
+    mat = grassMaterialArray();
+  } else if (key === "dirt"){
+    mat = texturedMat(tex_dirt());
+  } else if (key === "stone" || key === "cobblestone"){
+    mat = texturedMat(tex_stone());
+  } else if (key === "sand"){
+    mat = texturedMat(tex_sand());
+  } else if ((key||"").toLowerCase().includes("ore")){
+    mat = oreMaterial(key);
+  } else {
+    // Fallback: keep existing color system so DB materials still render
+    // If you have a color map already, it will still be used by the rest of the code.
+    mat = new THREE.MeshStandardMaterial({ color: colorFor(key) });
+  }
+
+  materialCache2.set(key, mat);
+  return mat;
+}
+
+
+function shouldPlaceTallGrass(x,y,z){
+  // Deterministic placement per coordinate (no save needed)
+  const n = (x*73856093) ^ (y*19349663) ^ (z*83492791);
+  return rand01(n>>>0) < DECOR_TALL_GRASS_CHANCE;
+}
+
+function makeTallGrassMesh(){
+  // crossed planes (like Minecraft)
+  const key = "__tall_grass_mat";
+  let mat = materialCache2.get(key);
+  if (!mat){
+    mat = texturedMat(tex_tall_grass(), { transparent: true, alphaTest: 0.35, side: THREE.DoubleSide });
+    materialCache2.set(key, mat);
+  }
+  const plane = new THREE.PlaneGeometry(1, 1);
+  const g = new THREE.Group();
+  const a = new THREE.Mesh(plane, mat);
+  const b = new THREE.Mesh(plane, mat);
+  a.position.y = 0.5; b.position.y = 0.5;
+  a.rotation.y = Math.PI/4;
+  b.rotation.y = -Math.PI/4;
+  // tag as decor so interactions can treat it as plant
+  a.userData.kind = "decor"; b.userData.kind="decor";
+  g.userData.kind = "decor";
+  g.add(a); g.add(b);
+  return g;
 }
 
 function buildChunk(cx, cz){
@@ -507,15 +1045,28 @@ function buildChunk(cx, cz){
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
 
-  // Base terrain (procedural + edits that fall within terrain height)
+  // Base terrain (procedural + edits) — render ONLY exposed blocks (performance)
   for (let x=0;x<CHUNK;x++){
     for (let z=0;z<CHUNK;z++){
       const wx = baseX + x;
       const wz = baseZ + z;
       const h = terrainHeight(wx, wz);
-      for (let y=0;y<=h;y++){
+      // render down to MIN_Y, but cull interior blocks
+      for (let y=MIN_Y; y<=h; y++){
         const code = getBlockCode(wx,y,wz);
         if (code === "air") continue;
+
+        // exposure culling: only render if any neighbor is air
+        const exposed =
+          getBlockCode(wx+1,y,wz) === "air" ||
+          getBlockCode(wx-1,y,wz) === "air" ||
+          getBlockCode(wx,y+1,wz) === "air" ||
+          getBlockCode(wx,y-1,wz) === "air" ||
+          getBlockCode(wx,y,wz+1) === "air" ||
+          getBlockCode(wx,y,wz-1) === "air";
+
+        if (!exposed) continue;
+
         const mesh = new THREE.Mesh(geom, matFor(code));
         mesh.castShadow = true;
         mesh.receiveShadow = true;
@@ -523,6 +1074,15 @@ function buildChunk(cx, cz){
         mesh.userData = { x:wx, y, z:wz, code };
         group.add(mesh);
         created.add(blockKey(wx,y,wz));
+
+        // Decorations: tall grass on exposed grass tops (no collision, harvestable)
+        if (code === "grass_block" && getBlockCode(wx,y+1,wz) === "air" && shouldPlaceTallGrass(wx,y,wz)){
+          const plant = makeTallGrassMesh();
+          plant.position.set(wx+0.5, y+1.0, wz+0.5);
+          // subtle random rotation
+          plant.rotation.y = rand01((wx*31 ^ wz*17)>>>0) * Math.PI;
+          group.add(plant);
+        }
       }
     }
   }
@@ -644,6 +1204,7 @@ window.addEventListener("mousedown", async (e)=>{
     const hit = raycastBlock();
     if (!hit) return;
     const { x,y,z } = hit.object.userData;
+    if (y <= MIN_Y) { setHint(\"Too deep — unbreakable layer.\"); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     bumpShake(0.10);
@@ -1134,8 +1695,19 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
 // SIMPLE PHYSICS
 // =======================
 function groundHeightAt(x,z){
-  // approximate: the terrain height at this position + 1.7 camera height offset handled separately
-  return terrainHeight(Math.floor(x), Math.floor(z)) + 1.0;
+  // Find the highest solid block beneath the player in this column, respecting edits.
+  // Prevents "teleport back to surface" when you dig out a deep shaft.
+  const wx = Math.floor(x);
+  const wz = Math.floor(z);
+  // start scan near player's current feet height
+  const startY = Math.floor(controls.object.position.y);
+  for (let y = startY; y >= MIN_Y; y--){
+    const code = getBlockCode(wx, y, wz);
+    if (code !== "air"){
+      return y + 1.0;
+    }
+  }
+  return MIN_Y + 1.0;
 }
 
 // =======================
@@ -1169,6 +1741,43 @@ function animate(){
   requestAnimationFrame(animate);
   const now = performance.now();
   const dt = Math.min(0.05, (now-lastT)/1000);
+
+  // Update block particles
+  updateParticles(dt);
+
+  // Update breaking progress (hold-to-break)
+  if (breaking && breakTargetKey && crackOverlay && crackOverlay.visible){
+    // derive position from overlay
+    const bx = Math.floor(crackOverlay.position.x - 0.5);
+    const by = Math.floor(crackOverlay.position.y - 0.5);
+    const bz = Math.floor(crackOverlay.position.z - 0.5);
+
+    breakProgress = Math.min(1, breakProgress + (dt*1000) / BREAK_TIME_MS);
+    const stage = Math.min(9, Math.floor(breakProgress * 10));
+    setCrackStage(stage);
+
+    if (breakProgress >= 1){
+      // Actually remove block now
+      const code = getBlockCode(bx,by,bz);
+      // Don't break air or unbreakable
+      if (code !== "air" && by > MIN_Y){
+        setBlockEdit(bx,by,bz,"air");
+        playSfx("break", 0.14);
+        bumpShake(0.06);
+        spawnBlockParticles(bx,by,bz, code);
+        rebuildChunkAt(bx,bz);
+        // also rebuild neighbors
+        rebuildChunkAt(bx+1,bz);
+        rebuildChunkAt(bx-1,bz);
+        rebuildChunkAt(bx,bz+1);
+        rebuildChunkAt(bx,bz-1);
+      }
+      hideCrack();
+    }
+  } else {
+    // If not holding, ensure we aren't showing stale crack overlay
+    // (mouseup handler also hides)
+  }
   lastT = now;
 
   // Day/Night visual cycle
@@ -1454,3 +2063,13 @@ function startMobTickerIfAllowed(){
 document.addEventListener("pointerlockerror", () => {
   if (!isMobile()) setHint("Click to lock mouse. (If it fails, try clicking again.)");
 });
+
+function colorFor(code){
+  const h = [...String(code)].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7);
+  const r = 60 + (h & 127);
+  const g = 60 + ((h>>>7) & 127);
+  const b = 60 + ((h>>>14) & 127);
+  return (r<<16) | (g<<8) | b;
+}
+
+window.addEventListener("mouseup", (e)=>{ if (e.button===0){ breaking=false; hideCrack(); } });

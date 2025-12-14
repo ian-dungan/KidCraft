@@ -51,7 +51,7 @@ canvas { display:block; }
 
 #hotbar{
   width: min(520px, 92vw);
-  margin: 0 auto 70px auto;
+  margin: 0 auto 10px auto;
   display: grid;
   grid-template-columns: repeat(9, 1fr);
   gap: 6px;
