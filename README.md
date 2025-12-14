@@ -23,3 +23,12 @@ Notes:
 - Mob ticking is performed by mods/admins only (1 tick/sec). Promote yourself to admin in DB once:
   update public.player_profiles set role='admin' where user_id = '<your-uuid>';
 - Guests remain read-only for block edits, but can chat.
+
+
+## Supabase SQL (IMPORTANT)
+Run these in order in Supabase SQL Editor:
+
+1) `supabase/01_cleanup.sql`
+2) `supabase/02_install.sql`
+
+This avoids "policy already exists" and other re-run issues.

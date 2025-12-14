@@ -11,8 +11,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
@@ -102,19 +102,25 @@ function setStatus(msg){ ui.status.textContent = msg; }
 function setHint(msg){ ui.hint.textContent = msg; }
 
 ui.signup.onclick = async () => {
-  const u = ui.username.value;
+  const raw = ui.username?.value || "";
+  const u = normalizeUsername(raw);
+  const p = ui.password?.value || "";
+  if (u.length < 3) return setStatus("Username must be 3+ chars (letters/numbers/_).");
+  if (p.length < 6) return setStatus("Password must be at least 6 characters.");
   savePreferredUsername(u);
-  const p = ui.password.value;
-  if (!u || !p) return setStatus("Enter username + password.");
+  if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Signed up. Now log in.");
 };
 
 ui.login.onclick = async () => {
-  const u = ui.username.value;
+  const raw = ui.username?.value || "";
+  const u = normalizeUsername(raw);
+  const p = ui.password?.value || "";
+  if (u.length < 3) return setStatus("Enter a valid username.");
+  if (!p) return setStatus("Enter password.");
   savePreferredUsername(u);
-  const p = ui.password.value;
-  if (!u || !p) return setStatus("Enter username + password.");
+  if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Logged in.");
 };
@@ -181,9 +187,12 @@ document.body.appendChild(cross);
 
 // Click to lock on desktop
 document.body.addEventListener("click", () => {
-  if (!isMobile()) controls.lock();
+  if (isMobile()) return;
+  // Guard: only request lock if supported and not already locked.
+  if (!document.body.requestPointerLock) return;
+  if (document.pointerLockElement) return;
+  try { controls.lock(); } catch {}
 });
-
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
@@ -213,8 +222,8 @@ addEventListener("keydown", (e)=>{
 // INPUT (PC + MOBILE)
 // =======================
 const keys = {};
-addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
-addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+addEventListener("keydown", e => { const k = (e.key||""); if(!k) return; keys[k.toLowerCase()] = true; });
+addEventListener("keyup", e => { const k = (e.key||""); if(!k) return; keys[k.toLowerCase()] = false; });
 
 // Mobile touch controls (invisible zones)
 const touchState = {
@@ -1189,3 +1198,8 @@ function startMobTickerIfAllowed(){
     await supabase.rpc("rpc_mob_tick", { in_world_id: worldId });
   }, 1000);
 }
+
+// Pointer lock errors can happen if user cancels quickly; avoid noisy console.
+document.addEventListener("pointerlockerror", () => {
+  if (!isMobile()) setHint("Click to lock mouse. (If it fails, try clicking again.)");
+});
