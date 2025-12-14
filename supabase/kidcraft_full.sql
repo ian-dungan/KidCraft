@@ -500,7 +500,7 @@ do $$ begin
 on public.worlds
 for select
 using (auth.role() = 'authenticated');
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- Materials read-only to authenticated users
 drop policy if exists "Materials Select Auth" on public.materials;
@@ -509,7 +509,7 @@ do $$ begin
 on public.materials
 for select
 using (auth.role() = 'authenticated');
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- Player profiles
 drop policy if exists "Profiles Select Own" on public.player_profiles;
@@ -520,7 +520,7 @@ do $$ begin
 on public.player_profiles
 for insert
 with check (user_id = auth.uid());
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 drop policy if exists "Profiles Update Own" on public.player_profiles;
 do $$ begin
@@ -529,7 +529,7 @@ on public.player_profiles
 for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- Player state
 drop policy if exists "State Select Auth" on public.player_state;
@@ -538,7 +538,7 @@ do $$ begin
 on public.player_state
 for select
 using (auth.role() = 'authenticated');
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 drop policy if exists "State Insert Own" on public.player_state;
 do $$ begin
@@ -546,7 +546,7 @@ do $$ begin
 on public.player_state
 for insert
 with check (user_id = auth.uid());
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 drop policy if exists "State Update Own" on public.player_state;
 do $$ begin
@@ -555,7 +555,7 @@ on public.player_state
 for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- Player inventories
 drop policy if exists "Inv Select Own" on public.player_inventories;
@@ -603,7 +603,7 @@ with check (
       and inv.user_id = auth.uid()
   )
 );
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- Player stats
 drop policy if exists "Stats Own" on public.player_stats;
@@ -620,7 +620,7 @@ do $$ begin
 on public.world_blocks
 for select
 using (auth.role() = 'authenticated');
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 drop policy if exists "World Blocks Mutate Auth" on public.world_blocks;
 create policy "World Blocks Mutate Auth"
@@ -636,7 +636,7 @@ do $$ begin
 on public.block_updates
 for select
 using (auth.role() = 'authenticated');
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 drop policy if exists "Block Updates Insert Own" on public.block_updates;
 do $$ begin
@@ -644,7 +644,7 @@ do $$ begin
 on public.block_updates
 for insert
 with check (user_id = auth.uid());
-  exception when duplicate_object then null; end $$;
+  exception when duplicate_object then null; end;
 
 -- =========================================================
 -- REALTIME PUBLICATION REGISTRATION
@@ -901,7 +901,7 @@ with check (
   public.is_non_guest()
   and not public.in_spawn_protection(x, z)
 );
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "World Blocks Update NonGuest"
@@ -913,7 +913,7 @@ with check (
   public.is_non_guest()
   and not public.in_spawn_protection(x, z)
 );
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 -- NOTE: intentionally NO delete policy on world_blocks (prevents grief wipes).
 
@@ -973,7 +973,7 @@ with check (
       and i.user_id = auth.uid()
   )
 );
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "Slots Update Own"
@@ -994,7 +994,7 @@ with check (
       and i.user_id = auth.uid()
   )
 );
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "Slots Delete Own"
@@ -1008,7 +1008,7 @@ using (
       and i.user_id = auth.uid()
   )
 );
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 -- ---------------------------
 -- player_stats (self-owned)
@@ -1019,7 +1019,7 @@ on public.player_stats
 for select
 to authenticated
 using (auth.uid() = user_id);
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "Stats Insert Own"
@@ -1027,7 +1027,7 @@ on public.player_stats
 for insert
 to authenticated
 with check (auth.uid() = user_id);
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "Stats Update Own"
@@ -1036,7 +1036,7 @@ for update
 to authenticated
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 do $$ begin
       create policy "Stats Delete Own"
@@ -1044,7 +1044,7 @@ on public.player_stats
 for delete
 to authenticated
 using (auth.uid() = user_id);
-    exception when duplicate_object then null; end $$;
+    exception when duplicate_object then null; end;
 
 -- ---------------------------
 -- chat_messages (if table exists)
@@ -1056,7 +1056,7 @@ do $$ begin
   for select
   to authenticated
   using (true);
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
 
 do $$ begin
   create policy "chat_insert_self"
@@ -1064,7 +1064,7 @@ do $$ begin
   for insert
   to authenticated
   with check (auth.uid() = user_id);
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
 
 -- NOTE: If you want guests read-only for chat too, add `and public.is_non_guest()`
 -- to chat_insert_self.
@@ -1084,9 +1084,9 @@ alter table public.player_profiles
 do $$ begin
   execute 'drop policy if exists "Profiles Select Own" on public.player_profiles';
   execute 'drop policy if exists "Profiles Select Auth" on public.player_profiles';
-  do $$ begin
+  begin
   create policy "Profiles Select Auth" on public.player_profiles for select to authenticated using (true);
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
 exception when undefined_table then null; end $$;
 
 
@@ -1110,16 +1110,16 @@ alter table public.recipes enable row level security;
 alter table public.recipe_ingredients enable row level security;
 
 do $$ begin
-  do $$ begin
+  begin
   create policy "recipes_select" on public.recipes for select to authenticated using (true);
-exception when duplicate_object then null; end $$;
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
+exception when duplicate_object then null; end;
 
 do $$ begin
-  do $$ begin
+  begin
   create policy "recipe_ingredients_select" on public.recipe_ingredients for select to authenticated using (true);
-exception when duplicate_object then null; end $$;
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
+exception when duplicate_object then null; end;
 
 
 insert into public.recipes (code, name, output_material_code, output_qty) values
@@ -1153,10 +1153,10 @@ create index if not exists mobs_world_idx on public.mobs(world_id);
 alter table public.mobs enable row level security;
 
 do $$ begin
-  do $$ begin
+  begin
   create policy "mobs_select" on public.mobs for select to authenticated using (true);
-exception when duplicate_object then null; end $$;
-exception when duplicate_object then null; end $$;
+exception when duplicate_object then null; end;
+exception when duplicate_object then null; end;
 
 -- Only mods/admins can update mobs via SECURITY DEFINER RPC (no direct policies)
 
