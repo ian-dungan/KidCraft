@@ -277,3 +277,87 @@ canvas { display:block; }
   text-overflow: ellipsis;
 }
 #hotbar .slot.empty{ opacity: 0.35; border-style: dashed; }
+
+/* Inventory/Crafting panel */
+#invPanel{
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(920px, 94vw);
+  height: min(520px, 88vh);
+  background: rgba(10,12,16,0.92);
+  border: 2px solid rgba(255,255,255,0.15);
+  border-radius: 14px;
+  z-index: 9999;
+  display: none;
+  color: #e9eef7;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+}
+#invPanel .inv-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+#invPanel .inv-title{ font-weight: 800; letter-spacing: 0.3px; }
+#invPanel .inv-hint{ opacity: 0.8; font-size: 12px; }
+#invPanel .inv-body{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+  height: calc(100% - 54px);
+}
+#invPanel .inv-col{
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  padding: 10px;
+  overflow: auto;
+}
+#invPanel .inv-subtitle{
+  font-weight: 700;
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+.inv-items{ display:flex; flex-direction:column; gap:6px; }
+.inv-item{
+  display:flex; justify-content:space-between; align-items:center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.inv-code{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; opacity: 0.95; }
+.inv-count{ font-weight: 800; }
+.inv-empty{ opacity: 0.65; padding: 8px; }
+
+.inv-recipes{ display:flex; flex-direction:column; gap:8px; }
+.inv-recipe{
+  text-align:left;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.07);
+  color: #e9eef7;
+  cursor: pointer;
+}
+.inv-recipe:hover{ background: rgba(255,255,255,0.10); }
+.inv-recipe.disabled{ opacity: 0.45; cursor: not-allowed; }
+.inv-recipe-name{ font-weight: 800; margin-bottom: 2px; }
+.inv-recipe-req{ font-size: 12px; opacity: 0.8; }
+
+/* Hotbar counts */
+#hotbar .slot-count{
+  position:absolute;
+  right: 6px;
+  bottom: 6px;
+  font-weight: 900;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.12);
+}

@@ -206,7 +206,7 @@ const TOOLS = [
 
 let HOTBAR_ITEMS = []; // tools + blocks
 function getActiveItem(){
-  return HOTBAR_ITEMS[activeSlot] || { kind:"block", code: BLOCKS[activeSlot]?.code || "dirt" };
+  return HOTBAR_ITEMS[activeSlot] || { kind:"block", code:"dirt" };
 }
 
 function requiredToolFor(code){
@@ -242,10 +242,21 @@ function dropForBlock(code){
   const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
   const drop = def?.props?.drops || def?.drops;
   if (drop) return drop;
-  // Minecraft-ish defaults
+
+  const lc = c.toLowerCase();
+  // Minecraft-ish ore drops (simplified; no fortune)
+  if (lc.includes("coal_ore")) return "coal";
+  if (lc.includes("iron_ore")) return "raw_iron";
+  if (lc.includes("copper_ore")) return "raw_copper";
+  if (lc.includes("gold_ore")) return "raw_gold";
+  if (lc.includes("diamond_ore")) return "diamond";
+  if (lc.includes("emerald_ore")) return "emerald";
+  if (lc.includes("lapis_ore")) return "lapis_lazuli";
+  if (lc.includes("redstone_ore")) return "redstone";
+
   if (c === "grass_block") return "dirt";
   if (c === "stone") return "cobblestone";
-  return c; // most blocks drop themselves
+  return c;
 }
 
 function canHarvestBlock(blockCode, toolItem){
@@ -319,7 +330,9 @@ async function loadMaterialsFromDB(){
       BLOCKS.length = 0;
       for (const b of COMMON_BLOCKS) BLOCKS.push(b);
       HOTBAR_ITEMS = [];
-      renderHotbar();
+      invLoad();
+  ensureStarterKit();
+  renderHotbar();
     }
     MATERIALS_READY = true;
     console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
@@ -650,15 +663,205 @@ function swingHotbar(){
   setTimeout(()=> el.classList.remove("swing"), 180);
 }
 
+
+// =======================
+// === SURVIVAL INVENTORY + CRAFTING (Minecraft-ish) ===
+let INV = {}; // code -> count
+let invOpen = false;
+
+function invStorageKey(){
+  const u = (typeof loadPreferredUsername === "function" ? loadPreferredUsername() : null) || localStorage.getItem("kidcraft_username") || "guest";
+  return "kidcraft_inv_" + u;
+}
+function invLoad(){
+  try{
+    const raw = localStorage.getItem(invStorageKey());
+    INV = raw ? JSON.parse(raw) : {};
+  }catch(e){ INV = {}; }
+}
+function invSave(){
+  try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV)); }catch(e){}
+}
+function invCount(code){ return (INV && INV[code]) ? INV[code] : 0; }
+function invAdd(code, n=1){
+  if (!code) return;
+  INV[code] = (INV[code]||0) + n;
+  if (INV[code] <= 0) delete INV[code];
+  invSave();
+  renderHotbar();
+  renderInventoryPanel();
+}
+function invTake(code, n=1){
+  const c = invCount(code);
+  if (c < n) return false;
+  INV[code] = c - n;
+  if (INV[code] <= 0) delete INV[code];
+  invSave();
+  renderHotbar();
+  renderInventoryPanel();
+  return true;
+}
+function invHas(inputs){
+  for (const [code, n] of inputs){
+    if (invCount(code) < n) return false;
+  }
+  return true;
+}
+function invConsume(inputs){
+  if (!invHas(inputs)) return false;
+  for (const [code,n] of inputs) invTake(code,n);
+  return true;
+}
+
+// Starting kit (Minecraft-ish vibe; tweak as you like)
+function ensureStarterKit(){
+  if (localStorage.getItem(invStorageKey()+"_init")) return;
+  invAdd("dirt", 32);
+  invAdd("grass_block", 16);
+  invAdd("cobblestone", 24);
+  invAdd("oak_log", 8);
+  invAdd("oak_planks", 16);
+  // starter tools
+  invAdd("wooden_pickaxe", 1);
+  invAdd("wooden_shovel", 1);
+  invAdd("wooden_axe", 1);
+  localStorage.setItem(invStorageKey()+"_init","1");
+}
+
+function toolTierRank(code){
+  const c = String(code||"");
+  if (c.startsWith("diamond_")) return TOOL_TIER.diamond;
+  if (c.startsWith("iron_")) return TOOL_TIER.iron;
+  if (c.startsWith("stone_")) return TOOL_TIER.stone;
+  if (c.startsWith("wooden_")) return TOOL_TIER.wood;
+  return TOOL_TIER.hand;
+}
+function bestToolCode(toolType){
+  const candidates = [
+    "diamond_"+toolType,
+    "iron_"+toolType,
+    "stone_"+toolType,
+    "wooden_"+toolType,
+  ];
+  for (const c of candidates){
+    if (invCount(c) > 0) return c;
+  }
+  return null;
+}
+
+// Crafting recipes (close to Minecraft, simplified; no fuel)
+const RECIPES = [
+  { name:"Oak Planks (x4)", out:["oak_planks",4], in:[["oak_log",1]] },
+  { name:"Sticks (x4)", out:["stick",4], in:[["oak_planks",2]] },
+  { name:"Crafting Table", out:["crafting_table",1], in:[["oak_planks",4]] },
+
+  { name:"Wood Pickaxe", out:["wooden_pickaxe",1], in:[["oak_planks",3],["stick",2]] },
+  { name:"Wood Shovel",  out:["wooden_shovel",1],  in:[["oak_planks",1],["stick",2]] },
+  { name:"Wood Axe",     out:["wooden_axe",1],     in:[["oak_planks",3],["stick",2]] },
+
+  { name:"Stone Pickaxe", out:["stone_pickaxe",1], in:[["cobblestone",3],["stick",2]] },
+  { name:"Stone Shovel",  out:["stone_shovel",1],  in:[["cobblestone",1],["stick",2]] },
+  { name:"Stone Axe",     out:["stone_axe",1],     in:[["cobblestone",3],["stick",2]] },
+
+  // Smelting (very simplified)
+  { name:"Smelt Raw Iron → Iron Ingot", out:["iron_ingot",1], in:[["raw_iron",1]] },
+  { name:"Smelt Raw Copper → Copper Ingot", out:["copper_ingot",1], in:[["raw_copper",1]] },
+  { name:"Smelt Raw Gold → Gold Ingot", out:["gold_ingot",1], in:[["raw_gold",1]] },
+
+  { name:"Iron Pickaxe", out:["iron_pickaxe",1], in:[["iron_ingot",3],["stick",2]] },
+  { name:"Iron Shovel",  out:["iron_shovel",1],  in:[["iron_ingot",1],["stick",2]] },
+  { name:"Iron Axe",     out:["iron_axe",1],     in:[["iron_ingot",3],["stick",2]] },
+
+  { name:"Diamond Pickaxe", out:["diamond_pickaxe",1], in:[["diamond",3],["stick",2]] },
+  { name:"Diamond Shovel",  out:["diamond_shovel",1],  in:[["diamond",1],["stick",2]] },
+  { name:"Diamond Axe",     out:["diamond_axe",1],     in:[["diamond",3],["stick",2]] },
+];
+
+function ensureInventoryPanel(){
+  if (document.getElementById("invPanel")) return;
+  const panel = document.createElement("div");
+  panel.id = "invPanel";
+  panel.innerHTML = `
+    <div class="inv-header">
+      <div class="inv-title">Inventory & Crafting</div>
+      <div class="inv-hint">Press <b>E</b> to close</div>
+    </div>
+    <div class="inv-body">
+      <div class="inv-col">
+        <div class="inv-subtitle">Items</div>
+        <div id="invItems" class="inv-items"></div>
+      </div>
+      <div class="inv-col">
+        <div class="inv-subtitle">Craft / Smelt</div>
+        <div id="invRecipes" class="inv-recipes"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(panel);
+}
+function toggleInventoryPanel(force){
+  ensureInventoryPanel();
+  invOpen = (force !== undefined) ? !!force : !invOpen;
+  const p = document.getElementById("invPanel");
+  if (p) p.style.display = invOpen ? "block" : "none";
+  if (invOpen) renderInventoryPanel();
+}
+function renderInventoryPanel(){
+  const p = document.getElementById("invPanel");
+  if (!p || !invOpen) return;
+  const itemsEl = document.getElementById("invItems");
+  const recEl = document.getElementById("invRecipes");
+  if (!itemsEl || !recEl) return;
+
+  // items list (sorted)
+  const entries = Object.entries(INV).sort((a,b)=>a[0].localeCompare(b[0]));
+  itemsEl.innerHTML = entries.length ? "" : "<div class='inv-empty'>Empty</div>";
+  for (const [code,count] of entries){
+    const row = document.createElement("div");
+    row.className = "inv-item";
+    row.innerHTML = `<span class="inv-code">${code}</span><span class="inv-count">${count}</span>`;
+    itemsEl.appendChild(row);
+  }
+
+  // recipes
+  recEl.innerHTML = "";
+  for (const r of RECIPES){
+    const ok = invHas(r.in);
+    const btn = document.createElement("button");
+    btn.className = "inv-recipe" + (ok ? "" : " disabled");
+    btn.disabled = !ok;
+    const req = r.in.map(([c,n])=>`${c}×${n}`).join(", ");
+    btn.innerHTML = `<div class="inv-recipe-name">${r.name}</div><div class="inv-recipe-req">${req}</div>`;
+    btn.onclick = ()=>{
+      if (!invConsume(r.in)) return;
+      invAdd(r.out[0], r.out[1]);
+      setHint(`Crafted ${r.out[0]}×${r.out[1]}`);
+      playSfx("place", 0.06);
+      swingHotbar();
+    };
+    recEl.appendChild(btn);
+  }
+}
+
 function renderHotbar(){
   const el = document.getElementById("hotbar");
   if (!el) return;
   el.innerHTML = "";
 
-  // Build hotbar: tools first, then common blocks (no repeats)
-  if (!HOTBAR_ITEMS.length){
-    HOTBAR_ITEMS = [...TOOLS, ...BLOCKS.slice(0, Math.max(0, 9-TOOLS.length)).map(b=>({kind:"block", code:b.code, name:b.name, color:b.color}))];
+  // Slot layout: 0 pickaxe, 1 shovel, 2 axe, 3-8 blocks
+  const blockPalette = (BLOCKS && BLOCKS.length) ? BLOCKS.slice(0, 12) : [];
+  const blockSlots = [];
+  for (const b of blockPalette){
+    if (blockSlots.length >= 6) break;
+    blockSlots.push({ kind:"block", code:b.code, name:b.name, color:b.color });
   }
+
+  HOTBAR_ITEMS = [
+    { kind:"tool", code: bestToolCode("pickaxe") || "wooden_pickaxe", display:"Pickaxe", toolType:"pickaxe", tier: (bestToolCode("pickaxe")||"wooden_pickaxe").split("_")[0] },
+    { kind:"tool", code: bestToolCode("shovel")  || "wooden_shovel",  display:"Shovel",  toolType:"shovel",  tier: (bestToolCode("shovel")||"wooden_shovel").split("_")[0] },
+    { kind:"tool", code: bestToolCode("axe")     || "wooden_axe",     display:"Axe",     toolType:"axe",     tier: (bestToolCode("axe")||"wooden_axe").split("_")[0] },
+    ...blockSlots
+  ];
 
   for (let i=0;i<9;i++){
     const it = HOTBAR_ITEMS[i];
@@ -670,16 +873,27 @@ function renderHotbar(){
       continue;
     }
 
-    // icon
     const icon = document.createElement("div");
     icon.className = "slot-icon";
 
     if (it.kind === "tool"){
+      // Gray out if you don't actually have the tool
+      const have = invCount(it.code) > 0;
       icon.textContent = it.code.includes("pickaxe") ? "⛏️" : it.code.includes("shovel") ? "🧹" : "🪓";
-      icon.style.filter = "drop-shadow(0 0 4px rgba(0,0,0,.35))";
+      icon.style.opacity = have ? "1" : "0.35";
+      const tierTag = (it.code.split("_")[0] || "wood").toUpperCase();
+      const tag = document.createElement("div");
+      tag.className = "slot-count";
+      tag.textContent = tierTag[0];
+      slot.appendChild(tag);
     } else {
-      // block
       icon.style.background = `#${(it.color ?? colorFor(it.code)).toString(16).padStart(6,"0")}`;
+      const cnt = invCount(it.code);
+      const countEl = document.createElement("div");
+      countEl.className = "slot-count";
+      countEl.textContent = cnt ? String(cnt) : "";
+      slot.appendChild(countEl);
+      if (!cnt) slot.style.opacity = "0.45";
     }
 
     const label = document.createElement("div");
@@ -875,6 +1089,15 @@ function terrainHeight(x,z){
   return Math.max(8, Math.min(96, h));
 }
 
+
+
+function isPlaceableBlock(code){
+  const c = String(code||"");
+  // quick accept for known block palette codes
+  if (["dirt","grass_block","stone","cobblestone","sand","gravel","oak_log","oak_planks"].includes(c)) return true;
+  const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
+  return def ? (def.category === "block") : false;
+}
 
 function isSolidCode(code){
   return code && code !== "air" && code !== "__air__";
@@ -1959,7 +2182,8 @@ function animate(){
         if (!harvestOk){
           setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) — dropped nothing.`);
         } else {
-          setHint(`Dropped: ${dropped}`);
+          invAdd(dropped, 1);
+          setHint(`Picked up: ${dropped}`);
         }
 
         rebuildChunkAt(bx,bz);
@@ -2273,3 +2497,11 @@ function colorFor(code){
 }
 
 window.addEventListener("mouseup", (e)=>{ if (e.button===0){ breaking=false; hideCrack(); } });
+
+window.addEventListener("keydown", (e)=>{
+  if (e.code === "KeyE"){
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return;
+    toggleInventoryPanel();
+  }
+});
