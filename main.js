@@ -220,6 +220,7 @@ document.body.addEventListener("click", () => {
 });
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
 
 // =======================
 // AUDIO (no external assets) + FEEDBACK
