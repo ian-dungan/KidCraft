@@ -1206,7 +1206,7 @@ begin
 
   -- Check ingredients
   for need in
-    select material_code, qty from public.recipe_ingredients where recipe_code = recipe_code
+    select ri.material_code, ri.qty from public.recipe_ingredients ri where ri.recipe_code = recipe_code
   loop
     select coalesce(sum(s.quantity),0) into have_qty
     from public.inventory_slots s
@@ -1220,7 +1220,7 @@ begin
 
   -- Consume ingredients across slots
   for need in
-    select material_code, qty from public.recipe_ingredients where recipe_code = recipe_code
+    select ri.material_code, ri.qty from public.recipe_ingredients ri where ri.recipe_code = recipe_code
   loop
     have_qty := need.qty * craft_qty;
 
