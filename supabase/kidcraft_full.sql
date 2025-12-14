@@ -495,53 +495,67 @@ alter table public.block_updates     enable row level security;
 
 -- Worlds readable by any authenticated user
 drop policy if exists "Worlds Select Auth" on public.worlds;
-create policy "Worlds Select Auth"
-  on public.worlds
-  for select
-  using (auth.role() = 'authenticated');
+do $$ begin
+    create policy "Worlds Select Auth"
+on public.worlds
+for select
+using (auth.role() = 'authenticated');
+  exception when duplicate_object then null; end $$;
 
 -- Materials read-only to authenticated users
 drop policy if exists "Materials Select Auth" on public.materials;
-create policy "Materials Select Auth"
-  on public.materials
-  for select
-  using (auth.role() = 'authenticated');
+do $$ begin
+    create policy "Materials Select Auth"
+on public.materials
+for select
+using (auth.role() = 'authenticated');
+  exception when duplicate_object then null; end $$;
 
 -- Player profiles
 drop policy if exists "Profiles Select Own" on public.player_profiles;
 
 drop policy if exists "Profiles Insert Own" on public.player_profiles;
-create policy "Profiles Insert Own"
-  on public.player_profiles
-  for insert
-  with check (user_id = auth.uid());
+do $$ begin
+    create policy "Profiles Insert Own"
+on public.player_profiles
+for insert
+with check (user_id = auth.uid());
+  exception when duplicate_object then null; end $$;
 
 drop policy if exists "Profiles Update Own" on public.player_profiles;
-create policy "Profiles Update Own"
-  on public.player_profiles
-  for update
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+do $$ begin
+    create policy "Profiles Update Own"
+on public.player_profiles
+for update
+using (user_id = auth.uid())
+with check (user_id = auth.uid());
+  exception when duplicate_object then null; end $$;
 
 -- Player state
 drop policy if exists "State Select Auth" on public.player_state;
-create policy "State Select Auth"
-  on public.player_state
-  for select
-  using (auth.role() = 'authenticated');
+do $$ begin
+    create policy "State Select Auth"
+on public.player_state
+for select
+using (auth.role() = 'authenticated');
+  exception when duplicate_object then null; end $$;
 
 drop policy if exists "State Insert Own" on public.player_state;
-create policy "State Insert Own"
-  on public.player_state
-  for insert
-  with check (user_id = auth.uid());
+do $$ begin
+    create policy "State Insert Own"
+on public.player_state
+for insert
+with check (user_id = auth.uid());
+  exception when duplicate_object then null; end $$;
 
 drop policy if exists "State Update Own" on public.player_state;
-create policy "State Update Own"
-  on public.player_state
-  for update
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+do $$ begin
+    create policy "State Update Own"
+on public.player_state
+for update
+using (user_id = auth.uid())
+with check (user_id = auth.uid());
+  exception when duplicate_object then null; end $$;
 
 -- Player inventories
 drop policy if exists "Inv Select Own" on public.player_inventories;
@@ -571,23 +585,25 @@ create policy "Inv Delete Own"
 
 -- Inventory slots follow inventory ownership
 drop policy if exists "Slots Own" on public.inventory_slots;
-create policy "Slots Own"
-  on public.inventory_slots
-  for all
-  using (
-    exists (
-      select 1 from public.player_inventories inv
-      where inv.id = inventory_id
-        and inv.user_id = auth.uid()
-    )
+do $$ begin
+    create policy "Slots Own"
+on public.inventory_slots
+for all
+using (
+  exists (
+    select 1 from public.player_inventories inv
+    where inv.id = inventory_id
+      and inv.user_id = auth.uid()
   )
-  with check (
-    exists (
-      select 1 from public.player_inventories inv
-      where inv.id = inventory_id
-        and inv.user_id = auth.uid()
-    )
-  );
+)
+with check (
+  exists (
+    select 1 from public.player_inventories inv
+    where inv.id = inventory_id
+      and inv.user_id = auth.uid()
+  )
+);
+  exception when duplicate_object then null; end $$;
 
 -- Player stats
 drop policy if exists "Stats Own" on public.player_stats;
@@ -599,10 +615,12 @@ create policy "Stats Own"
 
 -- World blocks
 drop policy if exists "World Blocks Select Auth" on public.world_blocks;
-create policy "World Blocks Select Auth"
-  on public.world_blocks
-  for select
-  using (auth.role() = 'authenticated');
+do $$ begin
+    create policy "World Blocks Select Auth"
+on public.world_blocks
+for select
+using (auth.role() = 'authenticated');
+  exception when duplicate_object then null; end $$;
 
 drop policy if exists "World Blocks Mutate Auth" on public.world_blocks;
 create policy "World Blocks Mutate Auth"
@@ -613,16 +631,20 @@ create policy "World Blocks Mutate Auth"
 
 -- Block updates
 drop policy if exists "Block Updates Select Auth" on public.block_updates;
-create policy "Block Updates Select Auth"
-  on public.block_updates
-  for select
-  using (auth.role() = 'authenticated');
+do $$ begin
+    create policy "Block Updates Select Auth"
+on public.block_updates
+for select
+using (auth.role() = 'authenticated');
+  exception when duplicate_object then null; end $$;
 
 drop policy if exists "Block Updates Insert Own" on public.block_updates;
-create policy "Block Updates Insert Own"
-  on public.block_updates
-  for insert
-  with check (user_id = auth.uid());
+do $$ begin
+    create policy "Block Updates Insert Own"
+on public.block_updates
+for insert
+with check (user_id = auth.uid());
+  exception when duplicate_object then null; end $$;
 
 -- =========================================================
 -- REALTIME PUBLICATION REGISTRATION
@@ -641,7 +663,35 @@ begin
 
     begin
       alter publication supabase_realtime add table public.world_blocks;
-    exception when duplicate_object then null; end;
+      execute 'drop policy if exists "World Blocks Insert NonGuest" on public.world_blocks';
+
+  execute 'drop policy if exists "World Blocks Update NonGuest" on public.world_blocks';
+
+  execute 'drop policy if exists "Slots Insert Own" on public.inventory_slots';
+
+  execute 'drop policy if exists "Slots Update Own" on public.inventory_slots';
+
+  execute 'drop policy if exists "Slots Delete Own" on public.inventory_slots';
+
+  execute 'drop policy if exists "Stats Select Own" on public.player_stats';
+
+  execute 'drop policy if exists "Stats Insert Own" on public.player_stats';
+
+  execute 'drop policy if exists "Stats Update Own" on public.player_stats';
+
+  execute 'drop policy if exists "Stats Delete Own" on public.player_stats';
+
+  execute 'drop policy if exists "recipes_select" on public.recipes';
+
+  execute 'drop policy if exists "recipe_ingredients_select" on public.recipe_ingredients';
+
+  execute 'drop policy if exists "mobs_select" on public.mobs';
+
+  execute 'drop policy if exists "Slots Own" on public.inventory_slots';
+
+  execute 'drop policy if exists "Stats Own" on public.player_stats';
+
+exception when duplicate_object then null; end;
   end if;
 end $$;
 
@@ -842,7 +892,8 @@ for select
 to authenticated
 using (true);
 
-create policy "World Blocks Insert NonGuest"
+do $$ begin
+      create policy "World Blocks Insert NonGuest"
 on public.world_blocks
 for insert
 to authenticated
@@ -850,8 +901,10 @@ with check (
   public.is_non_guest()
   and not public.in_spawn_protection(x, z)
 );
+    exception when duplicate_object then null; end $$;
 
-create policy "World Blocks Update NonGuest"
+do $$ begin
+      create policy "World Blocks Update NonGuest"
 on public.world_blocks
 for update
 to authenticated
@@ -860,6 +913,7 @@ with check (
   public.is_non_guest()
   and not public.in_spawn_protection(x, z)
 );
+    exception when duplicate_object then null; end $$;
 
 -- NOTE: intentionally NO delete policy on world_blocks (prevents grief wipes).
 
@@ -907,7 +961,8 @@ using (
   )
 );
 
-create policy "Slots Insert Own"
+do $$ begin
+      create policy "Slots Insert Own"
 on public.inventory_slots
 for insert
 to authenticated
@@ -918,8 +973,10 @@ with check (
       and i.user_id = auth.uid()
   )
 );
+    exception when duplicate_object then null; end $$;
 
-create policy "Slots Update Own"
+do $$ begin
+      create policy "Slots Update Own"
 on public.inventory_slots
 for update
 to authenticated
@@ -937,8 +994,10 @@ with check (
       and i.user_id = auth.uid()
   )
 );
+    exception when duplicate_object then null; end $$;
 
-create policy "Slots Delete Own"
+do $$ begin
+      create policy "Slots Delete Own"
 on public.inventory_slots
 for delete
 to authenticated
@@ -949,34 +1008,43 @@ using (
       and i.user_id = auth.uid()
   )
 );
+    exception when duplicate_object then null; end $$;
 
 -- ---------------------------
 -- player_stats (self-owned)
 -- ---------------------------
-create policy "Stats Select Own"
+do $$ begin
+      create policy "Stats Select Own"
 on public.player_stats
 for select
 to authenticated
 using (auth.uid() = user_id);
+    exception when duplicate_object then null; end $$;
 
-create policy "Stats Insert Own"
+do $$ begin
+      create policy "Stats Insert Own"
 on public.player_stats
 for insert
 to authenticated
 with check (auth.uid() = user_id);
+    exception when duplicate_object then null; end $$;
 
-create policy "Stats Update Own"
+do $$ begin
+      create policy "Stats Update Own"
 on public.player_stats
 for update
 to authenticated
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
+    exception when duplicate_object then null; end $$;
 
-create policy "Stats Delete Own"
+do $$ begin
+      create policy "Stats Delete Own"
 on public.player_stats
 for delete
 to authenticated
 using (auth.uid() = user_id);
+    exception when duplicate_object then null; end $$;
 
 -- ---------------------------
 -- chat_messages (if table exists)
@@ -1016,7 +1084,9 @@ alter table public.player_profiles
 do $$ begin
   execute 'drop policy if exists "Profiles Select Own" on public.player_profiles';
   execute 'drop policy if exists "Profiles Select Auth" on public.player_profiles';
+  do $$ begin
   create policy "Profiles Select Auth" on public.player_profiles for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
 exception when undefined_table then null; end $$;
 
 
@@ -1040,11 +1110,15 @@ alter table public.recipes enable row level security;
 alter table public.recipe_ingredients enable row level security;
 
 do $$ begin
+  do $$ begin
   create policy "recipes_select" on public.recipes for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
 exception when duplicate_object then null; end $$;
 
 do $$ begin
+  do $$ begin
   create policy "recipe_ingredients_select" on public.recipe_ingredients for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
 exception when duplicate_object then null; end $$;
 
 
@@ -1079,7 +1153,9 @@ create index if not exists mobs_world_idx on public.mobs(world_id);
 alter table public.mobs enable row level security;
 
 do $$ begin
+  do $$ begin
   create policy "mobs_select" on public.mobs for select to authenticated using (true);
+exception when duplicate_object then null; end $$;
 exception when duplicate_object then null; end $$;
 
 -- Only mods/admins can update mobs via SECURITY DEFINER RPC (no direct policies)
