@@ -13,7 +13,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 const SUPABASE_URL = "YOUR_SUPABASE_URL";
 const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
-// NOTE: world slug is selected in UI (world-select) and persisted in localStorage.
+const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
 const ENABLE_GUEST_BUTTON = true;
@@ -81,6 +81,7 @@ function normalizeUsername(u){
 }
 function usernameToEmail(u) {
   const n = normalizeUsername(u);
+  // Use a real-looking domain to satisfy Supabase email validation.
   return `${n}@kidcraft.game`;
 }
 
@@ -98,9 +99,6 @@ const ui = {
 
 ui.guest.style.display = ENABLE_GUEST_BUTTON ? "" : "none";
 
-// Hide gyro toggle on desktop
-try { if (!isMobile() && ui.gyro?.closest('.toggle')) ui.gyro.closest('.toggle').style.display = 'none'; } catch {}
-
 function setStatus(msg){ ui.status.textContent = msg; }
 function setHint(msg){ ui.hint.textContent = msg; }
 
@@ -111,7 +109,6 @@ ui.signup.onclick = async () => {
   if (u.length < 3) return setStatus("Username must be 3+ chars (letters/numbers/_).");
   if (p.length < 6) return setStatus("Password must be at least 6 characters.");
   savePreferredUsername(u);
-  getSelectedWorldSlug();
   if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Signed up. Now log in.");
@@ -124,14 +121,12 @@ ui.login.onclick = async () => {
   if (u.length < 3) return setStatus("Enter a valid username.");
   if (!p) return setStatus("Enter password.");
   savePreferredUsername(u);
-  getSelectedWorldSlug();
   if (ui.username) ui.username.value = u;
   const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
   setStatus(error ? error.message : "Logged in.");
 };
 
 ui.guest.onclick = async () => {
-  getSelectedWorldSlug();
   // Requires: Supabase Auth -> Anonymous sign-ins enabled
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
@@ -166,6 +161,8 @@ const BLOCKS = [
 // =======================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.FogExp2(0x87ceeb, 0.0022);
+
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
 camera.rotation.order = "YXZ";
@@ -174,14 +171,36 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
 document.body.appendChild(renderer.domElement);
 
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+
 const controls = new PointerLockControls(camera, document.body);
 scene.add(controls.object);
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
 scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+const dir = new THREE.DirectionalLight(0xffffff, 0.9);
 dir.position.set(50, 120, 20);
+dir.castShadow = true;
+dir.shadow.mapSize.set(2048, 2048);
+dir.shadow.camera.near = 1;
+dir.shadow.camera.far = 400;
+dir.shadow.camera.left = -120;
+dir.shadow.camera.right = 120;
+dir.shadow.camera.top = 120;
+dir.shadow.camera.bottom = -120;
 scene.add(dir);
+
+// Day/Night (visual-only) — cycles lighting + sky
+let timeOfDay = 0.25; // 0..1
+const DAY_LENGTH_SECONDS = 10 * 60; // 10 minutes per full cycle
+
+// tiny helper
+function _lerp(a,b,t){ return a + (b-a)*t; }
 
 // Crosshair (desktop)
 const cross = document.createElement("div");
@@ -201,6 +220,52 @@ document.body.addEventListener("click", () => {
 });
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// =======================
+// AUDIO (no external assets) + FEEDBACK
+// =======================
+let audioCtx = null;
+let audioUnlocked = false;
+
+function unlockAudio(){
+  if (audioUnlocked) return;
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    // iOS/Chrome: resume on user gesture
+    audioCtx.resume?.();
+    audioUnlocked = true;
+  }catch{}
+}
+window.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
+window.addEventListener("touchstart", unlockAudio, { once: true, passive: true });
+
+function tone(freq=440, dur=0.06, type="sine", vol=0.06){
+  if (!audioUnlocked || !audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0);
+  o.stop(t0 + dur + 0.02);
+}
+
+function playSfx(kind){
+  // tiny “gamey” cues
+  if (kind === "break") return tone(220, 0.05, "square", 0.05);
+  if (kind === "place") return tone(520, 0.04, "triangle", 0.045);
+  if (kind === "jump")  return tone(660, 0.06, "sine", 0.05);
+  if (kind === "step")  return tone(160 + Math.random()*40, 0.03, "triangle", 0.03);
+}
+
+function bumpShake(amount=0.12){
+  // used by movement + block actions
+  shake = Math.min(0.25, (shake || 0) + amount);
+}
 }
 
 // =======================
@@ -209,11 +274,19 @@ function isMobile(){
 let hotbarIndex = 0;
 function renderHotbar(){
   ui.hotbar.innerHTML = "";
+  // Show unique blocks (no forced repeats). Extra slots stay empty until you add more BLOCKS.
   for (let i=0;i<9;i++){
     const slot = document.createElement("div");
     slot.className = "slot" + (i===hotbarIndex ? " active":"");
-    const b = BLOCKS[i]; // no wrap => no duplicates
-    slot.textContent = b ? b.name : "";
+    const b = BLOCKS[i];
+    if (b){
+      slot.textContent = b.name;
+      slot.title = `${b.code}`;
+      slot.dataset.code = b.code;
+    } else {
+      slot.textContent = "";
+      slot.classList.add("empty");
+    }
     ui.hotbar.appendChild(slot);
   }
 }
@@ -429,9 +502,11 @@ function buildChunk(cx, cz){
   const map = worldEdits.get(k) || new Map();
   worldEdits.set(k, map);
 
+  const created = new Set(); // track rendered blocks so edits don't double-spawn
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
 
+  // Base terrain (procedural + edits that fall within terrain height)
   for (let x=0;x<CHUNK;x++){
     for (let z=0;z<CHUNK;z++){
       const wx = baseX + x;
@@ -441,11 +516,36 @@ function buildChunk(cx, cz){
         const code = getBlockCode(wx,y,wz);
         if (code === "air") continue;
         const mesh = new THREE.Mesh(geom, matFor(code));
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
         mesh.position.set(wx+0.5, y+0.5, wz+0.5);
         mesh.userData = { x:wx, y, z:wz, code };
         group.add(mesh);
+        created.add(blockKey(wx,y,wz));
       }
     }
+  }
+
+  // Render edits ABOVE terrain height (this is what enables building "new" blocks in the air)
+  for (const [bk, v] of map.entries()){
+    if (!v || v === "__air__") continue;
+    if (created.has(bk)) continue;
+
+    const parts = bk.split(",").map(Number);
+    if (parts.length !== 3) continue;
+    const [x,y,z] = parts;
+
+    // Only render edits that belong to this chunk
+    const [ecx, ecz] = worldToChunk(x, z);
+    if (ecx !== cx || ecz !== cz) continue;
+
+    const mesh = new THREE.Mesh(geom, matFor(v));
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.position.set(x+0.5, y+0.5, z+0.5);
+    mesh.userData = { x, y, z, code: v };
+    group.add(mesh);
+    created.add(bk);
   }
 
   chunkMeshes.set(k, group);
@@ -500,7 +600,7 @@ function raycastBlock(){
 }
 
 function getSelectedBlockCode(){
-  return BLOCKS[hotbarIndex % BLOCKS.length].code;
+  return (BLOCKS[hotbarIndex] || BLOCKS[0]).code;
 }
 
 // Right-click / tap to place, left-click to break (desktop)
@@ -528,7 +628,6 @@ async function breakBlockServer(world_id, x,y,z){
   await supabase.from("block_updates").insert({ world_id, user_id: userId(), x,y,z, action:"break", block_type: "air" });
 }
 
-
 // We'll store user id from session
 let sessionUserId = null;
 function setSessionUserId(s){
@@ -546,6 +645,8 @@ window.addEventListener("mousedown", async (e)=>{
     const { x,y,z } = hit.object.userData;
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
+    bumpShake(0.10);
+    playSfx("break");
     if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
   } else if (e.button === 2){ // place
     const hit = raycastBlock();
@@ -555,6 +656,8 @@ window.addEventListener("mousedown", async (e)=>{
     const code = getSelectedBlockCode();
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
+    bumpShake(0.08);
+    playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   }
 });
@@ -577,12 +680,16 @@ window.addEventListener("touchend", async (e)=>{
     const code = getSelectedBlockCode();
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
+    bumpShake(0.08);
+    playSfx("place");
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   } else {
     // break
     const { x,y,z } = hit.object.userData;
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
+    bumpShake(0.10);
+    playSfx("break");
     if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
   }
 }, { passive: true });
@@ -709,7 +816,12 @@ function inSpawnProtection(x, z){
 let lastStatePush = 0;
 
 async function ensureWorld(){
-  const { data, error } = await supabase.from("worlds").select("id,slug").eq("slug", (getSelectedWorldSlug ? getSelectedWorldSlug() : (worldSlug || "overworld"))).maybeSingle();
+  const slug = getSelectedWorldSlug();
+  const { data, error } = await supabase
+    .from("worlds")
+    .select("id,slug")
+    .eq("slug", slug)
+    .maybeSingle();
   if (error) { console.warn(error); return null; }
   worldId = data?.id || null;
   return worldId;
@@ -773,6 +885,20 @@ function addChatLine(username, msg, ts){
   const time = ts ? new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
   line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} • ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
   chat.messages.appendChild(line);
+
+  // Cap + fade older lines (keeps UI clean)
+  const lines = [...chat.messages.querySelectorAll(".chat-line")];
+  const MAX = 60;
+  if (lines.length > MAX){
+    for (let i=0;i<lines.length-MAX;i++) lines[i].remove();
+  }
+  const lines2 = [...chat.messages.querySelectorAll(".chat-line")];
+  const fadeStart = Math.max(0, lines2.length - 10);
+  lines2.forEach((el, i)=>{
+    if (i < fadeStart) el.style.opacity = "0.35";
+    else el.style.opacity = "1";
+  });
+
   chat.messages.scrollTop = chat.messages.scrollHeight;
 }
 async function loadRecentChat(){
@@ -870,7 +996,7 @@ function subscribeRealtime(){
   // Player state updates
   const ch1 = supabase.channel(`kidcraft_state_${worldId}`)
     .on("postgres_changes",
-      { event: "*", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
+      { event: "UPDATE", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
       (payload)=>{
         const row = payload.new || payload.old;
         if (!row) return;
@@ -984,19 +1110,17 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     setStatus("Loading...");
     loadCachedEdits(worldId);
     subscribeRealtime();
-    setHint((isGuest ? "Guest is read-only. " : "") + (isMobile()
+    setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
 
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
-    // Show chat + load recent history
     if (chat.root) chat.root.style.display = "";
-    await loadRecentChat();
+    try { await loadRecentChat(); } catch {}
+    try { await loadRecipes(); } catch {}
+    try { await loadMobs(); } catch {}
 
-    // Load crafting recipes + mobs (non-blocking)
-    loadRecipes().catch(()=>{});
-    loadMobs().catch(()=>{});
   } else {
     clearRealtime();
     document.getElementById("auth").style.display = "";
@@ -1014,14 +1138,64 @@ function groundHeightAt(x,z){
 }
 
 // =======================
-// ANIMATION LOOP
+// ANIMATION LOOP (polished feel)
 // =======================
 let lastT = performance.now();
+
+// horizontal velocity (world space)
+player.vx = 0;
+player.vz = 0;
+
+// jump buffering / coyote time
+let jumpQueuedUntil = 0;
+let coyoteUntil = 0;
+
+// camera polish
+let shake = 0;
+let shakeX = 0, shakeY = 0;
+let stepAccum = 0;
+
+addEventListener("keydown", (e)=>{
+  if ((e.key||"").toLowerCase() === " "){
+    // buffer jump for a short window
+    jumpQueuedUntil = performance.now() + 140;
+  }
+});
+
+function lerp(a,b,t){ return a + (b-a)*t; }
+
 function animate(){
   requestAnimationFrame(animate);
   const now = performance.now();
   const dt = Math.min(0.05, (now-lastT)/1000);
   lastT = now;
+
+  // Day/Night visual cycle
+  timeOfDay = (timeOfDay + dt / DAY_LENGTH_SECONDS) % 1;
+  // sun angle: midnight at 0, noon at 0.5
+  const sun = Math.sin(timeOfDay * Math.PI * 2) * 0.5 + 0.5; // 0..1
+  const sunH = lerp(0.12, 1.0, Math.max(0, Math.min(1, (sun - 0.15) / 0.85)));
+  dir.intensity = lerp(0.15, 1.0, sunH);
+  hemi.intensity = lerp(0.35, 0.95, sunH);
+  dir.position.set(
+    Math.cos(timeOfDay * Math.PI * 2) * 120,
+    lerp(18, 140, sunH),
+    Math.sin(timeOfDay * Math.PI * 2) * 120
+  );
+  // sky + fog color
+  const daySky = new THREE.Color(0x87ceeb);
+  const duskSky = new THREE.Color(0xffc27a);
+  const nightSky = new THREE.Color(0x061126);
+  let sky = daySky.clone();
+  if (sunH < 0.25){
+    sky = nightSky.clone().lerp(duskSky, sunH / 0.25);
+  } else if (sunH < 0.55){
+    sky = duskSky.clone().lerp(daySky, (sunH-0.25)/0.30);
+  } else {
+    sky = daySky;
+  }
+  scene.background = sky;
+  if (scene.fog) scene.fog.color.copy(sky);
 
   // Movement input
   let forwardInput = (keys.w ? 1 : 0) + (keys.s ? -1 : 0) + touchMoveForward;
@@ -1029,29 +1203,96 @@ function animate(){
   const len = Math.hypot(forwardInput, strafeInput);
   if (len > 1){ forwardInput/=len; strafeInput/=len; }
 
-  const moveSpeed = player.speed * dt;
-  if (forwardInput) controls.object.translateZ(-moveSpeed * forwardInput);
-  if (strafeInput)  controls.object.translateX(moveSpeed * strafeInput);
+  const sprint = !!keys.shift;
+  const targetSpeed = (sprint ? 9.0 : player.speed);
 
-  // Gravity + ground
+  // direction in world space (based on yaw only)
+  const yaw = controls.object.rotation.y;
+  const sin = Math.sin(yaw), cos = Math.cos(yaw);
+  const dirX = (-sin * forwardInput) + (cos * strafeInput);
+  const dirZ = (-cos * forwardInput) + (-sin * strafeInput);
+
+  // acceleration / friction
+  const accel = 32;
+  const friction = 18;
+  const moving = (Math.abs(dirX) + Math.abs(dirZ)) > 0.001;
+
+  if (moving){
+    const tx = dirX * targetSpeed;
+    const tz = dirZ * targetSpeed;
+    player.vx = lerp(player.vx, tx, 1 - Math.exp(-accel * dt));
+    player.vz = lerp(player.vz, tz, 1 - Math.exp(-accel * dt));
+  } else {
+    player.vx = lerp(player.vx, 0, 1 - Math.exp(-friction * dt));
+    player.vz = lerp(player.vz, 0, 1 - Math.exp(-friction * dt));
+  }
+
+  // Apply horizontal movement
   const pos = controls.object.position;
+  pos.x += player.vx * dt;
+  pos.z += player.vz * dt;
+
+  // Gravity + ground (simple terrain collision)
   const gh = groundHeightAt(pos.x, pos.z);
-  const desiredY = gh + 1.0; // player eye-ish
+  const baseEye = gh + 1.0;
+
+  // coyote window
+  if (player.grounded) coyoteUntil = now + 120;
+
   player.velocityY -= 25 * dt;
   pos.y += player.velocityY * dt;
 
-  if (pos.y < desiredY){
-    pos.y = desiredY;
+  if (pos.y < baseEye){
+    pos.y = baseEye;
     player.velocityY = 0;
     player.grounded = true;
   } else {
     player.grounded = false;
   }
 
-  // Jump (space or mobile "quick upward swipe" not implemented)
-  if (keys[" "] && player.grounded){
+  // Jump execute
+  const wantsJump = now < jumpQueuedUntil;
+  if (wantsJump && (player.grounded || now < coyoteUntil)){
+    jumpQueuedUntil = 0;
     player.velocityY = player.jump;
     player.grounded = false;
+    bumpShake(0.14);
+    playSfx("jump");
+  }
+
+  // Head bob + FOV sprint kick
+  const speed = Math.hypot(player.vx, player.vz);
+  const bobAmt = player.grounded ? Math.min(1, speed / 6) : 0;
+  const bob = Math.sin(now * 0.018) * 0.06 * bobAmt;
+  // camera is the control object here; apply bob as a small additive offset
+  pos.y += bob;
+
+  const baseFov = 75;
+  const sprintFov = 82;
+  camera.fov = lerp(camera.fov, sprint ? sprintFov : baseFov, 1 - Math.exp(-8 * dt));
+  camera.updateProjectionMatrix();
+
+  // Footsteps (synthetic)
+  if (player.grounded && speed > 0.8){
+    stepAccum += speed * dt;
+    if (stepAccum > 0.55){
+      stepAccum = 0;
+      playSfx("step");
+    }
+  } else {
+    stepAccum = 0;
+  }
+
+  // Camera shake (very subtle)
+  if (shake > 0){
+    shake -= dt * 1.6;
+    const s = Math.max(0, shake);
+    shakeX = (Math.random()*2-1) * s;
+    shakeY = (Math.random()*2-1) * s;
+    // apply to camera rotation a touch
+    camera.rotation.z = shakeX * 0.02;
+  } else {
+    camera.rotation.z = 0;
   }
 
   // Chunk streaming
@@ -1060,7 +1301,6 @@ function animate(){
   // Multiplayer state push
   pushPlayerState();
 
-  camera.rotation.z = 0;
   controls.object.rotation.z = 0;
   renderer.render(scene, camera);
 }

@@ -213,7 +213,31 @@ canvas { display:block; }
 .recipe button:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
 
 
-/* Desktop-only: hide mobile touch zones entirely so they can't intercept clicks */
+
+/* ----- POLISH ----- */
+.slot{
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.slot.active{
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.65), 0 10px 24px rgba(0,0,0,0.35);
+  transform: translateY(-1px) scale(1.03);
+  background: rgba(255,255,255,0.08);
+}
+.slot.empty{
+  opacity: 0.35;
+  border-style: dashed;
+}
+
+/* Desktop: remove mobile touch zones + gyro toggle */
 @media (pointer: fine) {
   #touch-left, #touch-right { display: none; }
+  #auth .toggle { display: none; }
+}
+
+/* Chat: slightly softer, less intrusive */
+#chat{
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+}
+.chat-line{
+  transition: opacity 200ms ease;
 }
