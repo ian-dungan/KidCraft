@@ -644,3 +644,38 @@ end $$;
 -- =========================================================
 -- END OF SCRIPT
 -- =========================================================
+
+
+-- =======================
+-- KidCraft Chat
+-- =======================
+create table if not exists public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  world_id uuid not null references public.worlds(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  message text not null check (char_length(message) between 1 and 200),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists chat_messages_world_created_idx
+  on public.chat_messages (world_id, created_at);
+
+alter table public.chat_messages enable row level security;
+
+-- Everyone signed-in (including anonymous users) can read chat in a world.
+do $$ begin
+  create policy "chat_select_world"
+  on public.chat_messages for select
+  to authenticated
+  using (true);
+exception when duplicate_object then null; end $$;
+
+-- Everyone signed-in (including anonymous users) can send chat as themselves.
+do $$ begin
+  create policy "chat_insert_self"
+  on public.chat_messages for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+exception when duplicate_object then null; end $$;
+
+-- Optional: allow users to delete their own messages (disabled by default)

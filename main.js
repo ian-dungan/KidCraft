@@ -11,8 +11,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
@@ -156,6 +156,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
+camera.rotation.order = "YXZ";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
@@ -291,6 +292,7 @@ function setupTouchZones(){
       touchState.look.lastY = t.clientY;
       yawObject.rotation.y -= dx * LOOK_SENS;
       pitchObject.rotation.x = clamp(pitchObject.rotation.x - dy * LOOK_SENS, -Math.PI/2, Math.PI/2);
+      pitchObject.rotation.z = 0; yawObject.rotation.z = 0;
       e.preventDefault();
       break;
     }
@@ -339,6 +341,7 @@ window.addEventListener("deviceorientation", (e)=>{
   const yawObject = controls.object;
   yawObject.rotation.y -= (da * Math.PI/180) * 0.5;
   camera.rotation.x = clamp(camera.rotation.x - (db * Math.PI/180) * 0.5, -Math.PI/2, Math.PI/2);
+  camera.rotation.z = 0; yawObject.rotation.z = 0;
 }, true);
 
 // =======================
@@ -736,6 +739,65 @@ function clearRealtime(){
   realtimeChannels = [];
 }
 
+
+/* =======================
+   CHAT (Realtime)
+   ======================= */
+const chat = {
+  root: document.getElementById("chat"),
+  messages: document.getElementById("chat-messages"),
+  form: document.getElementById("chat-form"),
+  input: document.getElementById("chat-input"),
+};
+function escapeHtml(s){
+  return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function addChatLine(username, msg, ts){
+  if (!chat.messages) return;
+  const line = document.createElement("div");
+  line.className = "chat-line";
+  const time = ts ? new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
+  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} • ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
+  chat.messages.appendChild(line);
+  chat.messages.scrollTop = chat.messages.scrollHeight;
+}
+async function loadRecentChat(){
+  if (!worldId) return;
+  const { data, error } = await supabase
+    .from("chat_messages")
+    .select("id, world_id, user_id, message, created_at")
+    .eq("world_id", worldId)
+    .order("created_at", { ascending: true })
+    .limit(40);
+  if (error) { console.warn("chat load:", error.message); return; }
+  chat.messages.innerHTML = "";
+  for (const row of data){
+    const name = await getUsernameForUserId(row.user_id) || "player";
+    addChatLine(name, row.message, row.created_at);
+  }
+}
+async function sendChat(message){
+  if (!worldId || !userId()) return;
+  const msg = (message||"").trim();
+  if (!msg) return;
+  // Guests can chat (allowed)
+  const { error } = await supabase.from("chat_messages").insert({
+    world_id: worldId,
+    user_id: userId(),
+    message: msg
+  });
+  if (error) console.warn("chat send:", error.message);
+}
+
+if (chat.form){
+  chat.form.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const msg = chat.input.value;
+    chat.input.value = "";
+    await sendChat(msg);
+  });
+}
+
 function subscribeRealtime(){
   if (!worldId) return;
 
@@ -762,7 +824,20 @@ function subscribeRealtime(){
       })
     .subscribe();
 
-  realtimeChannels.push(ch1, ch2);
+
+  // Chat messages
+  const ch3 = supabase.channel(`kidcraft_chat_${worldId}`)
+    .on("postgres_changes",
+      { event: "INSERT", schema: "public", table: "chat_messages", filter: `world_id=eq.${worldId}` },
+      async (payload)=>{
+        const row = payload.new;
+        if (!row) return;
+        const name = await getUsernameForUserId(row.user_id) || "player";
+        addChatLine(name, row.message, row.created_at);
+      })
+    .subscribe();
+
+  realtimeChannels.push(ch1, ch2, ch3);
 }
 
 // =======================
@@ -833,6 +908,8 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   } else {
     clearRealtime();
     document.getElementById("auth").style.display = "";
+    if (chat.root) chat.root.style.display = "none";
+    if (chat.messages) chat.messages.innerHTML = "";
   }
 });
 
@@ -891,6 +968,8 @@ function animate(){
   // Multiplayer state push
   pushPlayerState();
 
+  camera.rotation.z = 0;
+  controls.object.rotation.z = 0;
   renderer.render(scene, camera);
 }
 animate();
