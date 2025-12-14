@@ -11,8 +11,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 // CONFIG (YOU MUST SET)
 // =======================
-const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // If you want Guest login: enable Anonymous Sign-ins in Supabase Auth settings.
@@ -22,6 +22,58 @@ const ENABLE_GUEST_BUTTON = true;
 // SUPABASE
 // =======================
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/* =======================
+   PROFILE + USERNAME (created in-game)
+   ======================= */
+function savePreferredUsername(u){
+    const n = normalizeUsername(u);
+    if (n) localStorage.setItem("kidcraft_username", n);
+}
+function getPreferredUsername(){
+    return normalizeUsername(localStorage.getItem("kidcraft_username") || "");
+}
+function isAnonymousSession(sess){
+    const u = sess?.user;
+    if (!u) return false;
+    const prov = u.app_metadata?.provider || (u.app_metadata?.providers && u.app_metadata.providers[0]);
+    return prov === "anonymous" || !u.email;
+}
+async function ensurePlayerProfile(session){
+    const user_id = session.user.id;
+    let username = getPreferredUsername() || `player_${user_id.slice(0,8)}`;
+
+    let { error } = await supabase
+        .from("player_profiles")
+        .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
+
+    if (error && /username|duplicate/i.test(error.message || "")) {
+        username = `${username}_${Math.random().toString(36).slice(2,6)}`;
+        savePreferredUsername(username);
+        const res2 = await supabase
+            .from("player_profiles")
+            .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
+        if (res2.error) throw res2.error;
+        return username;
+    }
+    if (error) throw error;
+    savePreferredUsername(username);
+    return username;
+}
+const usernameCache = new Map(); // user_id -> username
+async function getUsernameForUserId(user_id){
+    if (!user_id) return null;
+    if (usernameCache.has(user_id)) return usernameCache.get(user_id);
+    const { data } = await supabase
+        .from("player_profiles")
+        .select("username")
+        .eq("user_id", user_id)
+        .maybeSingle();
+    const name = data?.username || null;
+    if (name) usernameCache.set(user_id, name);
+    return name;
+}
+
 
 // Username-only auth (fake email)
 function normalizeUsername(u){
@@ -51,6 +103,7 @@ function setHint(msg){ ui.hint.textContent = msg; }
 
 ui.signup.onclick = async () => {
   const u = ui.username.value;
+  savePreferredUsername(u);
   const p = ui.password.value;
   if (!u || !p) return setStatus("Enter username + password.");
   const { error } = await supabase.auth.signUp({ email: usernameToEmail(u), password: p });
@@ -59,6 +112,7 @@ ui.signup.onclick = async () => {
 
 ui.login.onclick = async () => {
   const u = ui.username.value;
+  savePreferredUsername(u);
   const p = ui.password.value;
   if (!u || !p) return setStatus("Enter username + password.");
   const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
@@ -69,6 +123,12 @@ ui.guest.onclick = async () => {
   // Requires: Supabase Auth -> Anonymous sign-ins enabled
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
+
+  try {
+    const sess = await supabase.auth.getSession();
+    const uid = sess?.data?.session?.user?.id;
+    if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
+  } catch {}
 };
 
 // =======================
@@ -469,6 +529,7 @@ window.addEventListener("mousedown", async (e)=>{
     const hit = raycastBlock();
     if (!hit) return;
     const { x,y,z } = hit.object.userData;
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
   } else if (e.button === 2){ // place
@@ -477,6 +538,7 @@ window.addEventListener("mousedown", async (e)=>{
     const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
     const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
     const code = getSelectedBlockCode();
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   }
@@ -498,11 +560,13 @@ window.addEventListener("touchend", async (e)=>{
     const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
     const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
     const code = getSelectedBlockCode();
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
   } else {
     // break
     const { x,y,z } = hit.object.userData;
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
   }
@@ -511,6 +575,66 @@ window.addEventListener("touchend", async (e)=>{
 // =======================
 // MULTIPLAYER: PLAYER VISIBILITY
 // =======================
+
+/* =======================
+   NAME TAGS (Sprite labels)
+   ======================= */
+function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    if (w < 2 * r) r = w / 2;
+    if (h < 2 * r) r = h / 2;
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y,   x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x,   y+h, r);
+    ctx.arcTo(x,   y+h, x,   y,   r);
+    ctx.arcTo(x,   y,   x+w, y,   r);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+}
+
+function makeNameTag(text){
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = 256;
+    canvas.height = 64;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    roundRect(ctx, 8, 8, 240, 48, 10, true, false);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(2.6, 0.65, 1);
+    sprite.position.set(0, 1.8, 0);
+    sprite.userData._tagCanvas = canvas;
+    sprite.userData._tagCtx = ctx;
+    sprite.userData._tagTexture = texture;
+    return sprite;
+}
+
+function updateNameTag(sprite, text){
+    const canvas = sprite.userData._tagCanvas;
+    const ctx = sprite.userData._tagCtx;
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    roundRect(ctx, 8, 8, 240, 48, 10, true, false);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
+    sprite.userData._tagTexture.needsUpdate = true;
+}
+
 const otherPlayers = new Map(); // user_id -> mesh
 function playerMesh(color=0x55aaff){
   const m = new THREE.Mesh(
@@ -527,18 +651,43 @@ function upsertOtherPlayer(uid, x,y,z, rotY){
   let mesh = otherPlayers.get(uid);
   if (!mesh){
     mesh = playerMesh(0xffaa55);
+        const tag = makeNameTag('...');
+        mesh.add(tag);
+        mesh.userData.nameTag = tag;
     otherPlayers.set(uid, mesh);
     scene.add(mesh);
   }
   mesh.position.set(x, y, z);
   mesh.rotation.y = rotY || 0;
+  (async ()=>{
+    const name = await getUsernameForUserId(uid);
+    if (name && mesh.userData.nameTag) updateNameTag(mesh.userData.nameTag, name);
+  })();
 }
 
 // =======================
 // DATABASE INTEGRATION (world_id + realtime)
 // =======================
 let worldId = null;
+let isGuest = false;
+let selfUsername = null;
 let realtimeChannels = [];
+
+/* =======================
+   SPAWN PROTECTION
+   ======================= */
+const SPAWN_X = 0;
+const SPAWN_Z = 0;
+const SPAWN_PROTECT_RADIUS = 10; // blocks
+const SPAWN_PROTECT_SECONDS = 20; // seconds after login
+let spawnProtectUntil = 0;
+
+function inSpawnProtection(x, z){
+    const dx = x - SPAWN_X;
+    const dz = z - SPAWN_Z;
+    return (dx*dx + dz*dz) <= (SPAWN_PROTECT_RADIUS*SPAWN_PROTECT_RADIUS);
+}
+
 let lastStatePush = 0;
 
 async function ensureWorld(){
@@ -551,9 +700,19 @@ async function ensureWorld(){
 async function pushPlayerState(){
   if (!worldId || !userId()) return;
   const now = performance.now();
-  if (now - lastStatePush < 120) return; // ~8 updates/sec
+  if (now - lastStatePush < 250) return; // ~4 updates/sec (free-tier friendly)
   lastStatePush = now;
 
+  
+  // Only send if changed meaningfully
+  if (!pushPlayerState._lastSent) pushPlayerState._lastSent = {x:0,y:0,z:0,r:0};
+  const ls = pushPlayerState._lastSent;
+  const p = controls.object.position;
+  const r = controls.object.rotation.y;
+  const moved = Math.hypot(p.x-ls.x, p.y-ls.y, p.z-ls.z) > 0.05;
+  const turned = Math.abs(r-ls.r) > 0.01;
+  if (!moved && !turned) return;
+  ls.x=p.x; ls.y=p.y; ls.z=p.z; ls.r=r;
   const p = controls.object.position;
   await supabase.from("player_state").upsert({
     user_id: userId(),
@@ -583,7 +742,7 @@ function subscribeRealtime(){
   // Player state updates
   const ch1 = supabase.channel(`kidcraft_state_${worldId}`)
     .on("postgres_changes",
-      { event: "*", schema: "public", table: "player_state" },
+      { event: "UPDATE", schema: "public", table: "player_state", filter: `world_id=eq.${worldId}` },
       (payload)=>{
         const row = payload.new || payload.old;
         if (!row) return;
@@ -594,7 +753,7 @@ function subscribeRealtime(){
   // Block updates (authoritative for edits here)
   const ch2 = supabase.channel(`kidcraft_blocks_${worldId}`)
     .on("postgres_changes",
-      { event: "INSERT", schema: "public", table: "block_updates" },
+      { event: "INSERT", schema: "public", table: "block_updates", filter: `world_id=eq.${worldId}` },
       (payload)=>{
         const row = payload.new;
         if (!row || row.world_id !== worldId) return;
@@ -648,17 +807,24 @@ function cacheEdit(world_id, x,y,z, code){
 // =======================
 supabase.auth.onAuthStateChange(async (_event, sess) => {
   setSessionUserId(sess);
+  isGuest = isAnonymousSession(sess);
+  spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
-    setStatus("Auth OK. Joining world...");
+    setStatus("Auth OK. Creating profile...");
+    try { selfUsername = await ensurePlayerProfile(sess); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
+    setStatus("Joining world...");
     await ensureWorld();
     if (!worldId){
       setStatus("World missing. Run SQL setup in Supabase.");
       return;
     }
-    setStatus("World joined. Loading...");
+    setStatus("World joined. Spawning...");
+    const sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
+    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    setStatus("Loading...");
     loadCachedEdits(worldId);
     subscribeRealtime();
-    setHint(isMobile()
+    setHint((isGuest ? "Guest is read-only. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place");
 
