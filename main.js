@@ -202,8 +202,8 @@ const TOOL_SPEED = { hand:1.0, wood:2.0, stone:4.0, iron:6.0, diamond:8.0 };
 
 const TOOLS = [
   { kind:"tool", code:"wooden_pickaxe", display:"Wood Pick", toolType:"pickaxe", tier:"wood" },
-  { kind:"tool", code:"wooden_shovel",  display:"Wood Shovel", toolType:"shovel",  tier:"wood" },
-  { kind:"tool", code:"wooden_axe",     display:"Wood Axe",    toolType:"axe",     tier:"wood" },
+  { kind:"tool", code:"wooden_shovel",  display:"Wood Shovel", toolType:"shovel",  tier:"wood", dur:60 },
+  { kind:"tool", code:"wooden_axe",     display:"Wood Axe",    toolType:"axe",     tier:"wood", dur:60 },
 ];
 
 let HOTBAR_ITEMS = []; // tools + blocks
@@ -368,6 +368,79 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 
 const controls = new PointerLockControls(camera, document.body);
+
+// =======================
+// === DAY/NIGHT + MOBS ===
+let timeOfDay = 0.15; // 0..1 (0.0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset)
+const DAY_SPEED = 1/900; // ~15 minutes per full day
+let playerHP = 20;
+let playerHunger = 20;
+
+function updateDayNight(dt){
+  timeOfDay = (timeOfDay + dt*DAY_SPEED) % 1;
+  const sun = Math.max(0, Math.sin((timeOfDay-0.25)*Math.PI*2)); // 0 at night, 1 at noon
+  const night = 1 - sun;
+  // adjust ambient + directional if present
+  if (window.__ambLight) window.__ambLight.intensity = 0.25 + 0.45*sun;
+  if (window.__dirLight){
+    window.__dirLight.intensity = 0.15 + 0.95*sun;
+    window.__dirLight.position.set(30*Math.cos(timeOfDay*2*Math.PI), 40*sun + 5, 30*Math.sin(timeOfDay*2*Math.PI));
+  }
+  // fog slightly thicker at night
+  if (scene.fog) scene.fog.density = 0.004 + 0.006*night;
+}
+const mobs = [];
+function spawnMobNearPlayer(){
+  if (mobs.length >= 6) return;
+  const px = controls.object.position.x;
+  const pz = controls.object.position.z;
+  const angle = Math.random()*Math.PI*2;
+  const dist = 14 + Math.random()*10;
+  const x = Math.floor(px + Math.cos(angle)*dist);
+  const z = Math.floor(pz + Math.sin(angle)*dist);
+  const y = groundHeightAt(x+0.5, z+0.5);
+  const geo = new THREE.BoxGeometry(0.8, 1.2, 0.8);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3c9b5a });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x+0.5, y+0.6, z+0.5);
+  m.userData = { hp: 10, speed: 1.2 + Math.random()*0.4, atkCd: 0 };
+  scene.add(m);
+  mobs.push(m);
+}
+function updateMobs(dt){
+  // only at night-ish
+  const sun = Math.max(0, Math.sin((timeOfDay-0.25)*Math.PI*2));
+  const night = 1 - sun;
+  if (night > 0.65 && Math.random() < dt*0.25) spawnMobNearPlayer();
+
+  const px = controls.object.position.x;
+  const pz = controls.object.position.z;
+  const py = controls.object.position.y;
+
+  for (let i=mobs.length-1;i>=0;i--){
+    const m = mobs[i];
+    const dx = px - m.position.x;
+    const dz = pz - m.position.z;
+    const dist = Math.hypot(dx,dz);
+    if (dist > 60){
+      scene.remove(m); mobs.splice(i,1); continue;
+    }
+    if (dist > 0.8){
+      m.position.x += (dx/dist) * m.userData.speed * dt;
+      m.position.z += (dz/dist) * m.userData.speed * dt;
+      // keep on ground
+      m.position.y = groundHeightAt(m.position.x, m.position.z) + 0.6;
+    } else {
+      m.userData.atkCd -= dt;
+      if (m.userData.atkCd <= 0){
+        m.userData.atkCd = 0.7;
+        playerHP = Math.max(0, playerHP - 1);
+        setHint("Ouch! HP: "+playerHP);
+      }
+    }
+  }
+}
+
 scene.add(controls.object);
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
@@ -384,7 +457,7 @@ dir.shadow.camera.top = 120;
 dir.shadow.camera.bottom = -120;
 scene.add(dir);
 
-// Day/Night (visual-only) — cycles lighting + sky
+// Day/Night (visual-only) - cycles lighting + sky
 let timeOfDay = 0.25; // 0..1
 const DAY_LENGTH_SECONDS = 10 * 60; // 10 minutes per full cycle
 
@@ -617,7 +690,7 @@ function tone(freq=440, dur=0.06, type="sine", vol=0.06){
 }
 
 function playSfx(kind){
-  // tiny “gamey” cues
+  // tiny "gamey" cues
   if (kind === "break") return tone(220, 0.05, "square", 0.05);
   if (kind === "place") return tone(520, 0.04, "triangle", 0.045);
   if (kind === "jump")  return tone(660, 0.06, "sine", 0.05);
@@ -654,6 +727,133 @@ function bumpShake(amount=0.12){
 // HOTBAR / INVENTORY (minimal)
 // =======================
 let hotbarIndex = 0;
+
+
+let uiStationOpen = null;
+let uiStationPos = null;
+let furnaceState = new Map(); // key -> {inCode,inN,fuelCode,fuelN,outCode,outN,prog,burning}
+
+function ensureUIRoot(){
+  let root = document.getElementById("stationUI");
+  if (root) return root;
+  root = document.createElement("div");
+  root.id = "stationUI";
+  root.style.display = "none";
+  root.innerHTML = `
+    <div class="panel">
+      <div class="title"><span id="stTitle"></span><button id="stClose">X</button></div>
+      <div id="stBody"></div>
+    </div>`;
+  document.body.appendChild(root);
+  root.querySelector("#stClose").onclick = ()=> closeStationUI();
+  return root;
+}
+
+function openStationUI(kind, posKey){
+  uiStationOpen = kind;
+  uiStationPos = posKey;
+  const root = ensureUIRoot();
+  root.style.display = "block";
+  document.getElementById("stTitle").textContent = kind === "crafting_table" ? "Crafting Table" : "Furnace";
+  renderStationUI();
+}
+function closeStationUI(){
+  const root = ensureUIRoot();
+  root.style.display = "none";
+  uiStationOpen = null;
+  uiStationPos = null;
+}
+
+function renderStationUI(){
+  const body = document.getElementById("stBody");
+  if (!body) return;
+  if (uiStationOpen === "crafting_table"){
+    // list DB recipes for station 'crafting_table'
+    const list = (window.__recipes || []).filter(r => (r.station||"") === "crafting_table");
+    body.innerHTML = `<div class="small">Click a recipe to craft if you have ingredients.</div>
+      <div class="recipeList">${list.map((r,i)=>{
+        const req = r.in.map(([c,n])=>`${c} x${n}`).join(", ");
+        return `<button class="recipeBtn" data-i="${i}">${r.out[0]} x${r.out[1]}<span>${req}</span></button>`;
+      }).join("")}</div>`;
+    body.querySelectorAll(".recipeBtn").forEach(btn=>{
+      btn.onclick = ()=>{
+        const i = parseInt(btn.dataset.i,10);
+        const r = list[i];
+        if (!r) return;
+        if (!canCraft(r)) { setHint("Missing ingredients"); return; }
+        consumeIngredients(r);
+        addToInventory(r.out[0], r.out[1]);
+        setHint(`Crafted ${r.out[0]} x${r.out[1]}`);
+      };
+    });
+  } else if (uiStationOpen === "furnace"){
+    const st = getFurnace(uiStationPos);
+    body.innerHTML = `
+      <div class="grid2">
+        <div><div class="lbl">Input</div><input id="fIn" placeholder="e.g. raw_iron" value="${st.inCode||""}"/><input id="fInN" type="number" min="0" value="${st.inN||0}"/></div>
+        <div><div class="lbl">Fuel</div><input id="fFuel" placeholder="e.g. coal" value="${st.fuelCode||""}"/><input id="fFuelN" type="number" min="0" value="${st.fuelN||0}"/></div>
+      </div>
+      <div class="row"><button id="fStart">Start</button><div class="bar"><div class="barIn" style="width:${Math.floor((st.prog||0)*100)}%"></div></div></div>
+      <div class="row small">Output: <b>${st.outCode||"-"}</b> x <b>${st.outN||0}</b></div>
+    `;
+    body.querySelector("#fStart").onclick = ()=>{
+      st.inCode = body.querySelector("#fIn").value.trim();
+      st.inN = parseInt(body.querySelector("#fInN").value,10)||0;
+      st.fuelCode = body.querySelector("#fFuel").value.trim();
+      st.fuelN = parseInt(body.querySelector("#fFuelN").value,10)||0;
+      setFurnace(uiStationPos, st);
+      setHint("Furnace running...");
+    };
+  }
+}
+
+function canCraft(recipe){
+  return recipe.in.every(([c,n]) => (getInventoryCount(c) >= n));
+}
+function consumeIngredients(recipe){
+  for (const [c,n] of recipe.in) addToInventory(c, -n);
+}
+
+function getFurnace(key){
+  if (!furnaceState.has(key)) furnaceState.set(key, { inCode:"", inN:0, fuelCode:"", fuelN:0, outCode:"", outN:0, prog:0, burning:false });
+  return furnaceState.get(key);
+}
+function setFurnace(key, st){
+  furnaceState.set(key, st);
+}
+
+function updateFurnaces(dt){
+  // timed smelting using DB smelting recipes if present
+  const smelts = window.__smelts || [];
+  for (const [k,st] of furnaceState.entries()){
+    if (!st.inCode || st.inN<=0) { st.burning=false; st.prog=0; continue; }
+    const rec = smelts.find(r=>r.in===st.inCode);
+    if (!rec) { st.burning=false; st.prog=0; continue; }
+    if (st.fuelN<=0) { st.burning=false; continue; }
+    st.burning=true;
+    st.prog = (st.prog||0) + dt/3.5; // ~3.5s per item
+    if (st.prog >= 1){
+      st.prog = 0;
+      st.inN -= 1;
+      // consume fuel occasionally
+      if (Math.random()<0.35) st.fuelN -= 1;
+      st.outCode = rec.out;
+      st.outN = (st.outN||0) + 1;
+      // auto-pickup into player inventory if near and UI open
+      if (distanceToPlayerKey(k) < 4.5){
+        addToInventory(st.outCode, 1);
+        st.outN -= 1;
+        setHint(`Smelted: ${st.outCode}`);
+      }
+    }
+    if (uiStationOpen==="furnace" && uiStationPos===k) renderStationUI();
+  }
+}
+function distanceToPlayerKey(key){
+  const [x,y,z] = key.split(",").map(Number);
+  const p = controls.object.position;
+  return Math.hypot((x+0.5)-p.x, (z+0.5)-p.z);
+}
 
 function swingHotbar(){
   const el = document.getElementById("hotbar");
@@ -907,12 +1107,12 @@ function renderInventoryPanel(){
     const btn = document.createElement("button");
     btn.className = "inv-recipe" + (ok ? "" : " disabled");
     btn.disabled = !ok;
-    const req = r.in.map(([c,n])=>`${c}×${n}`).join(", ");
+    const req = r.in.map(([c,n])=>`${c}x${n}`).join(", ");
     btn.innerHTML = `<div class="inv-recipe-name">${r.name}</div><div class="inv-recipe-req">${req}</div>`;
     btn.onclick = ()=>{
       if (!invConsume(r.in)) return;
       invAdd(r.out[0], r.out[1]);
-      setHint(`Crafted ${r.out[0]}×${r.out[1]}`);
+      setHint(`Crafted ${r.out[0]}x${r.out[1]}`);
       playSfx("place", 0.06);
       swingHotbar();
     };
@@ -956,7 +1156,7 @@ function renderHotbar(){
     if (it.kind === "tool"){
       // Gray out if you don't actually have the tool
       const have = invCount(it.code) > 0;
-      icon.textContent = it.code.includes("pickaxe") ? "⛏️" : it.code.includes("shovel") ? "🧹" : "🪓";
+      icon.textContent = it.code.includes("pickaxe") ? "[PICK]" : it.code.includes("shovel") ? "[SHOVEL]" : "[AXE]";
       icon.style.opacity = have ? "1" : "0.35";
       const tierTag = (it.code.split("_")[0] || "wood").toUpperCase();
       const tag = document.createElement("div");
@@ -975,7 +1175,7 @@ function renderHotbar(){
 
     const label = document.createElement("div");
     label.className = "slot-label";
-    label.textContent = it.kind === "tool" ? it.display : (it.name || it.code);
+    label.textContent = it.kind === "tool" ? `${it.display} (${it.durLeft ?? it.dur ?? 0})` : (it.name || it.code);
 
     slot.appendChild(icon);
     slot.appendChild(label);
@@ -1164,6 +1364,15 @@ function chunkKey(cx, cz){ return `${cx},${cz}`; }
 function worldToChunk(x,z){ return [Math.floor(x/CHUNK), Math.floor(z/CHUNK)]; }
 function blockKey(x,y,z){ return `${x},${y},${z}`; }
 
+
+function biomeAt(x,z){
+  // Simple biomes based on large-scale noise: desert / plains / forest
+  const n = noise2D(x*0.004, z*0.004); // -1..1
+  if (n > 0.35) return "desert";
+  if (n < -0.35) return "forest";
+  return "plains";
+}
+
 function terrainHeight(x,z){
   // Multi-octave noise terrain (higher peaks, deeper valleys)
   const n1 = noise2D(x*0.015, z*0.015);   // large features
@@ -1183,7 +1392,7 @@ function terrainHeight(x,z){
 function isPlaceableBlock(code){
   const c = String(code||"");
   // quick accept for known block palette codes
-  if (["dirt","grass_block","stone","cobblestone","sand","gravel","oak_log","oak_planks"].includes(c)) return true;
+  if (["dirt","grass_block","stone","cobblestone","sand","gravel","oak_log","oak_planks","crafting_table","furnace","torch"].includes(c)) return true;
   const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
   return def ? (def.category === "block") : false;
 }
@@ -1286,8 +1495,15 @@ function getBlockCode(x,y,z){
 
   const h = terrainHeight(x,z);
   if (y > h) return "air";
-  if (y === h) return "grass_block";
-  if (y >= h-3) return "dirt";
+  const biome = biomeAt(x,z);
+  if (y === h){
+    if (biome === "desert") return "sand";
+    return "grass_block";
+  }
+  if (y >= h-3){
+    if (biome === "desert") return "sand";
+    return "dirt";
+  }
   // Caves: carve underground air pockets/tubes
   if (isCaveAir(x,y,z,h)) return \"air\";
   return getStoneFill(x,y,z);
@@ -1366,6 +1582,58 @@ function tex_stone(){
     }
   }, "stone");
 }
+
+function tex_planks(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.fillStyle="#b88955"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let y=0;y<TEX_SIZE;y++){
+      const r = rand01(y*991);
+      const shade = r<0.5 ? "rgba(90,50,20,0.22)" : "rgba(240,210,160,0.12)";
+      for (let x=0;x<TEX_SIZE;x+=2) px(ctx,x,y,shade);
+    }
+    // plank seams
+    ctx.fillStyle="rgba(60,35,15,0.35)";
+    ctx.fillRect(0,5,TEX_SIZE,1);
+    ctx.fillRect(0,10,TEX_SIZE,1);
+  }, "planks");
+}
+function tex_crafting_table_top(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.drawImage(tex_planks().image,0,0);
+    ctx.strokeStyle="rgba(40,20,10,0.55)";
+    ctx.lineWidth=1;
+    ctx.strokeRect(1.5,1.5,13,13);
+    ctx.strokeRect(4.5,4.5,7,7);
+  }, "craft_top");
+}
+function tex_furnace(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.fillStyle="#808080"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
+    for (let i=0;i<130;i++){
+      const x=(i*9)%TEX_SIZE; const y=(i*5)%TEX_SIZE;
+      px(ctx,x,y, (rand01(i*77)<0.55)?"rgba(40,40,40,0.25)":"rgba(220,220,220,0.15)");
+    }
+    // opening
+    ctx.fillStyle="rgba(20,20,20,0.65)";
+    ctx.fillRect(4,7,8,5);
+    ctx.fillStyle="rgba(255,140,40,0.35)";
+    ctx.fillRect(5,10,6,1);
+  }, "furnace");
+}
+function tex_torch(){
+  return makeCanvasTexture((ctx)=>{
+    ctx.clearRect(0,0,TEX_SIZE,TEX_SIZE);
+    // stick
+    ctx.fillStyle="rgba(140,90,40,0.9)";
+    ctx.fillRect(7,6,2,9);
+    // flame
+    ctx.fillStyle="rgba(255,190,60,0.85)";
+    ctx.fillRect(6,3,4,4);
+    ctx.fillStyle="rgba(255,255,255,0.7)";
+    ctx.fillRect(7,4,2,2);
+  }, "torch");
+}
+
 function tex_sand(){
   return makeCanvasTexture((ctx)=>{
     ctx.fillStyle="#d8cf8a"; ctx.fillRect(0,0,TEX_SIZE,TEX_SIZE);
@@ -1470,6 +1738,17 @@ function matFor(code){
     mat = texturedMat(tex_stone());
   } else if (key === "sand"){
     mat = texturedMat(tex_sand());
+  } else if (key === "oak_planks"){
+    mat = texturedMat(tex_planks());
+  } else if (key === "crafting_table"){
+    const side = texturedMat(tex_planks());
+    const top  = texturedMat(tex_crafting_table_top());
+    mat = [side,side,top,side,side,side];
+  } else if (key === "furnace"){
+    mat = texturedMat(tex_furnace());
+  } else if (key === "torch"){
+    // torch rendered separately (billboard) but keep a fallback material
+    mat = texturedMat(tex_torch(), { transparent:true, alphaTest:0.2, side: THREE.DoubleSide });
   } else if ((key||"").toLowerCase().includes("ore")){
     mat = oreMaterial(key);
   } else {
@@ -1487,6 +1766,40 @@ function shouldPlaceTallGrass(x,y,z){
   // Deterministic placement per coordinate (no save needed)
   const n = (x*73856093) ^ (y*19349663) ^ (z*83492791);
   return rand01(n>>>0) < DECOR_TALL_GRASS_CHANCE;
+}
+
+
+function makeTorchMesh(){
+  const key = "__torch_mat";
+  let mat = materialCache2.get(key);
+  if (!mat){
+    mat = texturedMat(tex_torch(), { transparent:true, alphaTest:0.2, side: THREE.DoubleSide });
+    materialCache2.set(key, mat);
+  }
+  const plane = new THREE.PlaneGeometry(0.5, 0.9);
+  const g = new THREE.Group();
+  const a = new THREE.Mesh(plane, mat);
+  const b = new THREE.Mesh(plane, mat);
+  a.position.y = 0.45; b.position.y = 0.45;
+  a.rotation.y = Math.PI/4;
+  b.rotation.y = -Math.PI/4;
+  g.userData.kind = "decor_torch";
+  g.add(a); g.add(b);
+  return g;
+}
+let torchLights = new Map(); // key -> PointLight
+function ensureTorchLight(x,y,z){
+  const k = blockKey(x,y,z);
+  if (torchLights.has(k)) return;
+  const light = new THREE.PointLight(0xffd27d, 0.85, 10, 2);
+  light.position.set(x+0.5, y+0.8, z+0.5);
+  scene.add(light);
+  torchLights.set(k, light);
+}
+function removeTorchLight(x,y,z){
+  const k = blockKey(x,y,z);
+  const l = torchLights.get(k);
+  if (l){ scene.remove(l); torchLights.delete(k); }
 }
 
 function makeTallGrassMesh(){
@@ -1524,7 +1837,7 @@ function buildChunk(cx, cz){
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
 
-  // Base terrain (procedural + edits) — render ONLY exposed blocks (performance)
+  // Base terrain (procedural + edits) - render ONLY exposed blocks (performance)
   for (let x=0;x<CHUNK;x++){
     for (let z=0;z<CHUNK;z++){
       const wx = baseX + x;
@@ -1534,6 +1847,15 @@ function buildChunk(cx, cz){
       for (let y=MIN_Y; y<=h; y++){
         const code = getBlockCode(wx,y,wz);
         if (code === "air") continue;
+
+        if (code === "torch"){
+          const t = makeTorchMesh();
+          t.position.set(wx+0.5, y+0.0, wz+0.5);
+          group.add(t);
+          ensureTorchLight(wx,y,wz);
+          created.add(blockKey(wx,y,wz));
+          continue;
+        }
 
         // exposure culling: only render if any neighbor is air
         const exposed =
@@ -1683,7 +2005,7 @@ window.addEventListener("mousedown", async (e)=>{
     const hit = raycastBlock();
     if (!hit) return;
     const { x,y,z } = hit.object.userData;
-    if (y <= MIN_Y) { setHint(\"Too deep — unbreakable layer.\"); return; }
+    if (y <= MIN_Y) { setHint(\"Too deep - unbreakable layer.\"); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     bumpShake(0.10);
@@ -1926,7 +2248,7 @@ function addChatLine(username, msg, ts){
   const line = document.createElement("div");
   line.className = "chat-line";
   const time = ts ? new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
-  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} • ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
+  line.innerHTML = `<div class="chat-meta">${escapeHtml(username||"player")} * ${escapeHtml(time)}</div><div>${escapeHtml(msg)}</div>`;
   chat.messages.appendChild(line);
 
   // Cap + fade older lines (keeps UI clean)
@@ -2154,8 +2476,8 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     loadCachedEdits(worldId);
     subscribeRealtime();
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
-      ? "Left: move • Right: look • Tap: break • Double-tap: place"
-      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
+      ? "Left: move * Right: look * Tap: break * Double-tap: place"
+      : "WASD move * Mouse look (click to lock) * Left click: break * Right click: place"));
 
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
@@ -2274,6 +2596,9 @@ function animate(){
   // Update block particles
   updateParticles(dt);
   maybePlayFootsteps();
+  updateDayNight(dt);
+  updateMobs(dt);
+  updateFurnaces(dt);
 
   // Update breaking progress (hold-to-break)
   if (breaking && breakTargetKey && crackOverlay && crackOverlay.visible){
@@ -2294,13 +2619,14 @@ function animate(){
         const tool = getActiveItem();
         const harvestOk = canHarvestBlock(code, tool);
         const dropped = harvestOk ? dropForBlock(code) : null;
+        if (code === "torch") removeTorchLight(bx,by,bz);
         setBlockEdit(bx,by,bz,"air");
         swingHotbar();
         playSfx("break", 0.14);
         bumpShake(0.06);
         spawnBlockParticles(bx,by,bz, code);
         if (!harvestOk){
-          setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) — dropped nothing.`);
+          setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) - dropped nothing.`);
         } else {
           invAdd(dropped, 1);
           setHint(`Picked up: ${dropped}`);
@@ -2474,7 +2800,7 @@ if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
 
 function getSelectedWorldSlug(){
   const active = getActiveItem();
-    if (active.kind === "tool"){ setHint("You are holding a tool — select a block to place."); return; }
+    if (active.kind === "tool"){ setHint("You are holding a tool - select a block to place."); return; }
     const sel = document.getElementById('world-select');
   const slug = (sel?.value || worldSlug || 'overworld');
   worldSlug = slug;
@@ -2539,7 +2865,7 @@ async function loadRecipes(){
   for (const r of (data||[])){
     const div = document.createElement("div");
     div.className = "recipe";
-    const ings = (r.ingredients||[]).map(i => `${i.material_code}×${i.qty}`).join(", ");
+    const ings = (r.ingredients||[]).map(i => `${i.material_code}x${i.qty}`).join(", ");
     div.innerHTML = `
       <div class="recipe-head">
         <div>

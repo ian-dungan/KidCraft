@@ -361,3 +361,18 @@ canvas { display:block; }
   background: rgba(0,0,0,0.55);
   border: 1px solid rgba(255,255,255,0.12);
 }
+
+#stationUI{ position: fixed; inset: 0; background: rgba(0,0,0,.45); display:none; z-index: 30; }
+#stationUI .panel{ width: min(520px, 92vw); margin: 8vh auto; background: rgba(18,18,22,.98); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; padding: 10px; }
+#stationUI .title{ display:flex; align-items:center; justify-content:space-between; font-weight:700; }
+#stationUI .title button{ background: rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); color:#fff; border-radius:10px; padding:6px 10px; cursor:pointer; }
+#stationUI .small{ opacity:.85; font-size: 12px; margin: 8px 0; }
+#stationUI .recipeList{ display:flex; flex-direction:column; gap:8px; max-height: 52vh; overflow:auto; }
+#stationUI .recipeBtn{ text-align:left; padding:10px; border-radius:12px; background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); color:#fff; cursor:pointer; }
+#stationUI .recipeBtn span{ display:block; opacity:.8; font-size: 12px; margin-top: 4px; }
+#stationUI .grid2{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+#stationUI .lbl{ font-size:12px; opacity:.85; margin-bottom:4px; }
+#stationUI input{ width:100%; box-sizing:border-box; padding:8px; border-radius:10px; border:1px solid rgba(255,255,255,.16); background: rgba(0,0,0,.25); color:#fff; }
+#stationUI .row{ display:flex; align-items:center; gap:10px; margin-top: 10px; }
+#stationUI .bar{ flex:1; height:10px; background: rgba(255,255,255,.10); border-radius:999px; overflow:hidden; }
+#stationUI .barIn{ height:100%; background: rgba(120,220,140,.75); width:0%; }
