@@ -1,3 +1,9 @@
+-- ============================================================
+-- KidCraft 02_install.sql
+-- Full schema + seed + RLS + RPCs.
+-- Safe to run after 01_cleanup.sql
+-- ============================================================
+
 -- =========================================================
 -- GroveCraft Full Database Build + Expanded Minecraft-like Materials
 -- Single-file Supabase SQL
