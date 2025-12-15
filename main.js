@@ -154,7 +154,7 @@ async function supaLoadRecipes(){
   return [...map.values()];
 }
 
-t supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+window.supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Load material list (blocks/ores) from DB to drive palette + world variety
 loadMaterialsFromDB();
