@@ -2529,8 +2529,8 @@ async function loadRecipes(){
   if (!craftingUI.list) return;
   // Fetch recipes + ingredients (simple, small)
   const { data, error } = await supabase
-    .from("recipes")
-    .select("code, name, output_material_code, output_qty, ingredients:recipe_ingredients(material_code, qty)")
+    .from("kidcraft_recipes")
+    .select("code, name, output_material_code, output_qty, ingredients:kidcraft_recipe_ingredients(material_code, qty)")
     .order("name", { ascending: true })
     .limit(200);
   if (error) { craftingUI.list.innerHTML = `<div>Recipes unavailable: ${escapeHtml(error.message)}</div>`; return; }
