@@ -1442,7 +1442,7 @@ function getStoneFill(x,y,z){
 }
 
 function getBlockCode(x,y,z){
-    if (y <= MIN_Y) return \"stone\";
+    if (y <= MIN_Y) return "stone";
 // server/client edits override
   const [cx, cz] = worldToChunk(x,z);
   const k = chunkKey(cx, cz);
