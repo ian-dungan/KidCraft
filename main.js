@@ -1852,7 +1852,7 @@ window.addEventListener("mousedown", async (e)=>{
     const hit = raycastBlock();
     if (!hit) return;
     const { x,y,z } = hit.object.userData;
-    if (y <= MIN_Y) { setHint(\"Too deep - unbreakable layer.\"); return; }
+    if (y <= MIN_Y) { setHint("Too deep - unbreakable layer."); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     bumpShake(0.10);
