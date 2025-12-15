@@ -1838,7 +1838,8 @@ async function breakBlockServer(world_id, x,y,z){
 }
 
 // We'll store user id from session
-let sessionUserId = null;
+// sessionUserId already declared (deduped)
+
 function setSessionUserId(s){
   sessionUserId = s?.user?.id || null;
 }
