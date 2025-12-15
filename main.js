@@ -908,7 +908,6 @@ function bumpShake(amount=0.12){
   // used by movement + block actions
   shake = Math.min(0.25, (shake || 0) + amount);
 }
-}
 
 // =======================
 // HOTBAR / INVENTORY (minimal)
