@@ -140,7 +140,7 @@ const ENABLE_GUEST_BUTTON = true;
 // =======================
 // SUPABASE
 // =======================
-const async function supaLoadRecipes(){
+async function supaLoadRecipes(){
   if (!window.supabase) return [];
   const { data: r, error: er } = await window.supabase.from("kidcraft_recipes").select("*");
   if (er) { console.warn("[Recipes] load failed", er); return []; }
