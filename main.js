@@ -927,7 +927,7 @@ function swingHotbar(){
 
 // =======================
 // === SURVIVAL INVENTORY + CRAFTING (Minecraft-ish) ===
-let INV = {}; // code -> count
+let INV_LEGACY = {}; // code -> count
 let invOpen = false;
 
 function invStorageKey(){
@@ -937,17 +937,17 @@ function invStorageKey(){
 function invLoad(){
   try{
     const raw = localStorage.getItem(invStorageKey());
-    INV = raw ? JSON.parse(raw) : {};
-  }catch(e){ INV = {}; }
+    INV_LEGACY = raw ? JSON.parse(raw) : {};
+  }catch(e){ INV_LEGACY = {}; }
 }
 function invSave(){
-  try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV)); }catch(e){}
+  try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }catch(e){}
 }
-function invCount(code){ return (INV && INV[code]) ? INV[code] : 0; }
+function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
 function invAdd(code, n=1){
   if (!code) return;
-  INV[code] = (INV[code]||0) + n;
-  if (INV[code] <= 0) delete INV[code];
+  INV_LEGACY[code] = (INV_LEGACY[code]||0) + n;
+  if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
   renderHotbar();
   renderInventoryPanel();
@@ -955,8 +955,8 @@ function invAdd(code, n=1){
 function invTake(code, n=1){
   const c = invCount(code);
   if (c < n) return false;
-  INV[code] = c - n;
-  if (INV[code] <= 0) delete INV[code];
+  INV_LEGACY[code] = c - n;
+  if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
   renderHotbar();
   renderInventoryPanel();
@@ -1075,7 +1075,7 @@ function renderInventoryPanel(){
   if (!itemsEl || !recEl) return;
 
   // items list (sorted)
-  const entries = Object.entries(INV).sort((a,b)=>a[0].localeCompare(b[0]));
+  const entries = Object.entries(INV_LEGACY).sort((a,b)=>a[0].localeCompare(b[0]));
   itemsEl.innerHTML = entries.length ? "" : "<div class='inv-empty'>Empty</div>";
   for (const [code,count] of entries){
     const row = document.createElement("div");
