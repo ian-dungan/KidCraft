@@ -1458,7 +1458,7 @@ function getBlockCode(x,y,z){
   if (y === h) return "grass_block";
   if (y >= h-3) return "dirt";
   // Caves: carve underground air pockets/tubes
-  if (isCaveAir(x,y,z,h)) return \"air\";
+  if (isCaveAir(x,y,z,h)) return "air";
   return getStoneFill(x,y,z);
 }
 
