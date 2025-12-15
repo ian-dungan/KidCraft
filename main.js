@@ -1364,18 +1364,69 @@ function chunkKey(cx, cz){ return `${cx},${cz}`; }
 function worldToChunk(x,z){ return [Math.floor(x/CHUNK), Math.floor(z/CHUNK)]; }
 function blockKey(x,y,z){ return `${x},${y},${z}`; }
 
+
+// =======================
+// TERRAIN SHAPING (plains + hills + mountains + lakes + rivers)
+// =======================
+const SEA_LEVEL = 24;
+
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function lerp(a,b,t){ return a + (b-a)*t; }
+function smoothstep(e0, e1, x){
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t*t*(3 - 2*t);
+}
+function abs(x){ return x < 0 ? -x : x; }
+
+function biomeAt(x,z){
+  const temp = noise2D(x*0.0008, z*0.0008);                  // -1..1
+  const humid = noise2D((x+999)*0.0008, (z-999)*0.0008);     // -1..1
+  const mount = smoothstep(0.25, 0.65, noise2D(x*0.0012, z*0.0012)); // 0..1
+
+  if (mount > 0.62) return "mountains";
+  if (temp > 0.35 && humid < 0.0) return "desert";
+  if (temp < -0.25) return "snow";
+  if (humid > 0.35) return "forest";
+  return "plains";
+}
+
+function riverMask(x,z){
+  // Domain-warped thin bands -> rivers
+  const wx = x + noise2D(x*0.0008, z*0.0008) * 26;
+  const wz = z + noise2D((x+500)*0.0008, (z+500)*0.0008) * 26;
+  const r = abs(noise2D(wx*0.002, wz*0.002));       // 0..1-ish
+  return smoothstep(0.03, 0.0, r);                 // 0..1 (1 = river center)
+}
+
+function lakeMask(x,z){
+  const m = noise2D(x*0.0010, z*0.0010);
+  return smoothstep(0.55, 0.82, m);                // 0..1 (1 = lake region)
+}
+
 function terrainHeight(x,z){
-  // Multi-octave noise terrain (higher peaks, deeper valleys)
-  const n1 = noise2D(x*0.015, z*0.015);   // large features
-  const n2 = noise2D(x*0.05,  z*0.05);    // medium detail
-  const n3 = noise2D(x*0.12,  z*0.12);    // small detail
-  const base = 28;
-  const h = base
-    + Math.floor((n1+1)*24)              // 0..48
-    + Math.floor(n2*10)                  // -10..10
-    + Math.floor(n3*4);                  // -4..4
-  // clamp within reasonable range (client rendering)
-  return Math.max(8, Math.min(96, h));
+  // Base: broad smoothness for big plains
+  const base = noise2D(x*0.002, z*0.002) * 7.5;     // gentle
+  // Hills: rolling variation
+  const hills = noise2D(x*0.010, z*0.010) * 6.0;
+  // Mountains: only in some regions, masked
+  const mountMask = smoothstep(0.25, 0.65, noise2D(x*0.0012, z*0.0012));
+  const mountains = noise2D(x*0.004, z*0.004) * 34.0 * mountMask;
+
+  // Plains mask: flattens large regions
+  const plainsMask = smoothstep(0.15, 0.55, noise2D(x*0.0015, z*0.0015));
+
+  let h = SEA_LEVEL + base;
+  h += hills * (1.0 - mountMask);
+  h = lerp(h, SEA_LEVEL + base*0.8, plainsMask*0.8); // flatten
+  h += mountains;
+
+  // Lakes: shallow basins
+  h -= lakeMask(x,z) * 5.5;
+
+  // Rivers: carve long channels
+  h -= riverMask(x,z) * 10.0;
+
+  return clamp(Math.floor(h), 6, 120);
 }
 
 
@@ -1482,9 +1533,23 @@ function getBlockCode(x,y,z){
   }
 
   const h = terrainHeight(x,z);
-  if (y > h) return "air";
-  if (y === h) return "grass_block";
-  if (y >= h-3) return "dirt";
+  if (y > h) {
+    // Water fill up to sea level
+    if (y <= SEA_LEVEL) return "water";
+    return "air";
+  }
+  if (y === h) {
+    const b = biomeAt(x,z);
+    if (b === "desert") return "sand";
+    if (b === "snow") return "snow";
+    if (b === "mountains") return "stone";
+    return "grass_block";
+  }
+  if (y >= h-3) {
+    const b = biomeAt(x,z);
+    if (b === "desert") return "sand";
+    return "dirt";
+  }
   // Caves: carve underground air pockets/tubes
   if (isCaveAir(x,y,z,h)) return "air";
   return "stone";
@@ -1681,12 +1746,13 @@ function matFor(code){
 
 
 function shouldPlaceTallGrass(x, y, z){
-  // Safe decor chance
   const chance = (typeof DECOR_TALL_GRASS_CHANCE === "number") ? DECOR_TALL_GRASS_CHANCE : 0.08;
-  // Only place on grass at surface (caller usually ensures), keep deterministic-ish randomness
-  // Use a small hash so tall grass doesn't change every frame.
+  // only on land biomes with grass
+  const b = biomeAt(x,z);
+  if (b === "desert" || b === "snow" || b === "mountains") return false;
+  if (y <= SEA_LEVEL) return false;
   const h = ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) >>> 0;
-  const r = (h % 10000) / 10000; // 0..1
+  const r = (h % 10000) / 10000;
   return r < chance;
 }
 
@@ -2350,7 +2416,9 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       return;
     }
     setStatus("World joined. Spawning...");
-    const sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
+    let sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
+    // If underwater, pop above sea level
+    sy = Math.max(sy, SEA_LEVEL + 3);
     controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
     setStatus("Loading...");
     loadCachedEdits(worldId);
