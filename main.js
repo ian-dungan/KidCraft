@@ -679,6 +679,146 @@ function spawnBlockParticles(x,y,z, baseCode){
   window.__particleBursts.push(group);
 }
 
+
+
+// =======================
+// === ITEM DROPS (entities + magnet pickup) ===
+const DROP_DESPAWN_MS = 5 * 60 * 1000;   // 5 minutes like Minecraft
+const DROP_PICKUP_RADIUS = 1.6;
+const DROP_MERGE_RADIUS = 0.8;
+const DROP_MAGNET_ACCEL = 12.0;          // how quickly items get pulled in
+const drops = []; // {mesh, code, qty, vel:THREE.Vector3, born:number}
+
+function dropColor(code){
+  // simple stable color; use block color when possible
+  try { return colorFor(code); } catch { }
+  const h = [...String(code)].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7);
+  const r = 80 + (h & 127);
+  const g = 80 + ((h>>>7) & 127);
+  const b = 80 + ((h>>>14) & 127);
+  return (r<<16) | (g<<8) | b;
+}
+
+function makeDropMesh(code){
+  // small billboarded quad (like an item sprite)
+  const geo = new THREE.PlaneGeometry(0.35, 0.35);
+  const mat = new THREE.MeshBasicMaterial({
+    color: dropColor(code),
+    transparent: true,
+    opacity: 0.95,
+    side: THREE.DoubleSide
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.userData.kind = "drop";
+  return m;
+}
+
+function spawnDrop(code, qty, x,y,z){
+  if (!code || qty <= 0) return;
+  // split into reasonable piles for visuals (still merges/picks up)
+  let remaining = qty|0;
+  while (remaining > 0){
+    const pile = Math.min(remaining, 8);
+    remaining -= pile;
+
+    const mesh = makeDropMesh(code);
+    mesh.position.set(x+0.5, y+0.65, z+0.5);
+    mesh.rotation.y = Math.random()*Math.PI*2;
+
+    // kick outward a bit
+    const vel = new THREE.Vector3(
+      (Math.random()-0.5)*1.4,
+      1.6 + Math.random()*1.1,
+      (Math.random()-0.5)*1.4
+    );
+
+    scene.add(mesh);
+    drops.push({ mesh, code, qty: pile, vel, born: performance.now() });
+  }
+}
+
+function tryMergeDrops(){
+  for (let i=0;i<drops.length;i++){
+    const a = drops[i];
+    if (!a) continue;
+    for (let j=i+1;j<drops.length;j++){
+      const b = drops[j];
+      if (!b) continue;
+      if (a.code !== b.code) continue;
+      const d = a.mesh.position.distanceTo(b.mesh.position);
+      if (d < DROP_MERGE_RADIUS){
+        // merge b into a
+        a.qty += b.qty;
+        scene.remove(b.mesh);
+        drops.splice(j,1);
+        j--;
+      }
+    }
+  }
+}
+
+async function pickupDrop(idx){
+  const d = drops[idx];
+  if (!d) return;
+  // add to inventory (unlimited qty, displayed as stacks of 64 in UI)
+  invAdd(d.code, d.qty);
+  // persist
+  if (typeof supaUpsertInventory === "function") {
+    try { await supaUpsertInventory(d.code); } catch {}
+  }
+  // remove mesh
+  scene.remove(d.mesh);
+  drops.splice(idx,1);
+  setHint(`Picked up: ${d.qty}x ${d.code}`);
+  HOTBAR_ITEMS = [];
+  renderHotbar();
+}
+
+function updateDrops(dt){
+  if (!drops.length) return;
+  const now = performance.now();
+
+  // Occasionally merge nearby piles (cheap)
+  if ((now|0) % 500 < 16) tryMergeDrops();
+
+  const playerPos = controls?.object?.position;
+  for (let i=drops.length-1;i>=0;i--){
+    const d = drops[i];
+    // despawn
+    if (now - d.born > DROP_DESPAWN_MS){
+      scene.remove(d.mesh);
+      drops.splice(i,1);
+      continue;
+    }
+
+    // simple physics (no collision changes): gravity + drag
+    d.vel.y -= 7.5 * dt;
+    d.vel.multiplyScalar(1.0 - 0.6*dt);
+
+    // magnet pull when close
+    if (playerPos){
+      const toPlayer = new THREE.Vector3().subVectors(playerPos, d.mesh.position);
+      const dist = toPlayer.length();
+      if (dist < DROP_PICKUP_RADIUS){
+        toPlayer.normalize();
+        d.vel.addScaledVector(toPlayer, DROP_MAGNET_ACCEL * dt);
+
+        // pickup when very close
+        if (dist < 0.65){
+          pickupDrop(i);
+          continue;
+        }
+      }
+    }
+
+    d.mesh.position.addScaledVector(d.vel, dt);
+
+    // float/bob & face camera
+    d.mesh.position.y += Math.sin((now - d.born)/250) * 0.0006;
+    if (camera) d.mesh.quaternion.copy(camera.quaternion);
+  }
+}
+
 function updateParticles(dt){
   const arr = window.__particleBursts;
   if (!arr || !arr.length) return;
@@ -2275,6 +2415,7 @@ function animate(){
 
   // Update block particles
   updateParticles(dt);
+  updateDrops(dt);
   maybePlayFootsteps();
 
   // Update breaking progress (hold-to-break)
@@ -2304,7 +2445,6 @@ function animate(){
         if (!harvestOk){
           setHint(`Need ${requiredToolFor(code)} (tier ${minToolTierFor(code)}+) - dropped nothing.`);
         } else {
-          invAdd(dropped, 1);
           setHint(`Picked up: ${dropped}`);
         }
 
