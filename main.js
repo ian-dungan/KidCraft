@@ -2,6 +2,42 @@
 // === SUPABASE PERSISTENCE (inventory/world/furnace) ===
 
 // Global decor defaults (safe)
+
+
+// =======================
+// === MATH / UTIL HELPERS (guarded) ===
+if (typeof clamp !== "function") {
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+}
+if (typeof lerp !== "function") {
+  function lerp(a, b, t){ return a + (b - a) * t; }
+}
+if (typeof smoothstep !== "function") {
+  function smoothstep(a, b, x){
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t*t*(3 - 2*t);
+  }
+}
+if (typeof invLerp !== "function") {
+  function invLerp(a, b, v){ return (v - a) / (b - a); }
+}
+if (typeof frac !== "function") {
+  function frac(x){ return x - Math.floor(x); }
+}
+if (typeof hash2i !== "function") {
+  function hash2i(x, z){
+    // deterministic 32-bit hash from ints; seed mixed later if _SEED_H32 exists
+    let h = (x|0) * 374761393 ^ (z|0) * 668265263 ^ (typeof _SEED_H32 === "number" ? _SEED_H32 : 0);
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = Math.imul(h, 1274126177) >>> 0;
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+}
+if (typeof rand01_from_xz !== "function") {
+  function rand01_from_xz(x,z){
+    return (hash2i(x|0, z|0) % 1000000) / 1000000;
+  }
+}
 var DECOR_TALL_GRASS_CHANCE = 0.08;
 const WORLD_EDITS_CACHE = new Map(); // key cx,cz -> array edits
 
@@ -1419,13 +1455,6 @@ function blockKey(x,y,z){ return `${x},${y},${z}`; }
 // TERRAIN SHAPING (plains + hills + mountains + lakes + rivers)
 // =======================
 const SEA_LEVEL = 24;
-
-function clamp_DUP(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
-function lerp(a,b,t){ return a + (b-a)*t; }
-function smoothstep(e0, e1, x){
-  const t = clamp((x - e0) / (e1 - e0), 0, 1);
-  return t*t*(3 - 2*t);
-}
 function abs(x){ return x < 0 ? -x : x; }
 
 function biomeAt(x, z){
@@ -1828,6 +1857,115 @@ function makeTallGrassMesh(){
 }
 
 
+
+function tryPlaceVillage(setBlock, getH, getBlock, x, z, biome){
+  // Simple village: cluster of houses + dirt paths. Plains/forest only.
+  if (!(biome === "plains" || biome === "forest")) return false;
+
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
+
+  // Region-based seed so it's rare but consistent
+  const region = 256;
+  const rx = Math.floor(gx / region);
+  const rz = Math.floor(gz / region);
+  const r0 = rand01_from_xz(rx * 9991, rz * 9973);
+
+  if (r0 > 0.18) return false; // ~18% of regions have a village candidate
+
+  // Village center inside region (deterministic)
+  const ox = Math.floor((rand01_from_xz(rx*1237, rz*8911) - 0.5) * region * 0.6);
+  const oz = Math.floor((rand01_from_xz(rx*7331, rz*1777) - 0.5) * region * 0.6);
+  const cx = rx * region + ox;
+  const cz = rz * region + oz;
+
+  // Only place if this chunk contains the center-ish
+  if (Math.abs(gx - cx) > 24 || Math.abs(gz - cz) > 24) return false;
+
+  const cy = getH(cx, cz);
+  if (cy <= SEA_LEVEL+1) return false;
+  if (!isAreaMostlyFlat(getH, cx, cz, 10, 3)) return false;
+
+  const houseCount = 3 + Math.floor(rand01_from_xz(cx+55, cz-55) * 4); // 3..6
+  const spots = [
+    [0,0],[12,0],[-12,0],[0,12],[0,-12],[12,12],[-12,12],[12,-12],[-12,-12]
+  ];
+
+  const path = "dirt_path";
+  const floor = "oak_planks";
+  const wall  = "oak_log";
+  const roof  = "oak_planks";
+
+  function carvePathLine(x0,z0,x1,z1){
+    const steps = Math.max(Math.abs(x1-x0), Math.abs(z1-z0));
+    for (let i=0;i<=steps;i++){
+      const t = steps===0?0:i/steps;
+      const px = Math.round(lerp(x0,x1,t));
+      const pz = Math.round(lerp(z0,z1,t));
+      const py = getH(px,pz);
+      // don't path underwater
+      if (py <= SEA_LEVEL) continue;
+      // replace surface
+      setBlock(px, py, pz, path);
+      // clear tall grass
+      if (getBlock(px, py+1, pz) === "tall_grass") setBlock(px, py+1, pz, "air");
+    }
+  }
+
+  function placeHouse(hx,hz){
+    const hy = getH(hx,hz);
+    if (hy <= SEA_LEVEL+1) return false;
+    if (!isAreaMostlyFlat(getH, hx,hz, 4, 2)) return false;
+    const w = 7, d = 9, hh = 5;
+
+    // floor + clear interior
+    for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+      for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+        setBlock(hx+dx, hy, hz+dz, floor);
+        for (let dy=1; dy<=hh+2; dy++) setBlock(hx+dx, hy+dy, hz+dz, "air");
+      }
+    }
+    // walls
+    for (let dy=1; dy<=hh; dy++){
+      for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+        setBlock(hx-Math.floor(w/2), hy+dy, hz+dz, wall);
+        setBlock(hx+Math.floor(w/2), hy+dy, hz+dz, wall);
+      }
+      for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+        setBlock(hx+dx, hy+dy, hz-Math.floor(d/2), wall);
+        setBlock(hx+dx, hy+dy, hz+Math.floor(d/2), wall);
+      }
+    }
+    // door
+    setBlock(hx, hy+1, hz+Math.floor(d/2), "air");
+    setBlock(hx, hy+2, hz+Math.floor(d/2), "air");
+
+    // roof
+    for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+      for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+        setBlock(hx+dx, hy+hh+1, hz+dz, roof);
+      }
+    }
+    return true;
+  }
+
+  // Place houses and paths to center
+  let placed = 0;
+  for (let i=0;i<spots.length && placed<houseCount;i++){
+    const sx = cx + spots[i][0];
+    const sz = cz + spots[i][1];
+    if (placeHouse(sx,sz)){
+      carvePathLine(sx,sz,cx,cz);
+      placed++;
+    }
+  }
+  // central plaza path cross
+  carvePathLine(cx-14, cz, cx+14, cz);
+  carvePathLine(cx, cz-14, cx, cz+14);
+
+  return placed > 0;
+}
+
 function isAreaMostlyFlat(getH, cx, cz, radius, maxDelta){
   let minH = 1e9, maxH = -1e9;
   for (let dz=-radius; dz<=radius; dz++){
@@ -1842,34 +1980,35 @@ function isAreaMostlyFlat(getH, cx, cz, radius, maxDelta){
 }
 
 function tryPlaceTree(setBlock, x, y, z, biome){
-  // tree types per biome
-  const isSnow = biome === "snow";
-  const isForest = biome === "forest";
-  const isPlains = biome === "plains";
+  // Biome-aware tree distribution (Minecraft-ish)
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
 
-  const density = isForest ? 0.07 : (isPlains ? 0.02 : 0.0);
+  let density = 0.0;
+  if (biome === "forest") density = 0.10;
+  else if (biome === "plains") density = 0.025;
+  else if (biome === "snow") density = 0.04;
+  else density = 0.0;
+
   if (density <= 0) return false;
-
-  const gx = x + WORLD_OFFSET_X;
-  const gz = z + WORLD_OFFSET_Z;
   if (rand01_from_xz(gx, gz) > density) return false;
 
-  const trunk = isSnow ? "spruce_log" : "oak_log";
-  const leaves = isSnow ? "spruce_leaves" : "oak_leaves";
-  const h = 4 + Math.floor(rand01_from_xz(gx+17, gz-17) * 3); // 4..6
+  // Type selection: birch in forest sometimes, spruce in snow, oak otherwise
+  let trunk = "oak_log", leaves = "oak_leaves";
+  if (biome === "snow") { trunk = "spruce_log"; leaves = "spruce_leaves"; }
+  else if (biome === "forest" && rand01_from_xz(gx+31, gz-31) < 0.35) { trunk = "birch_log"; leaves = "birch_leaves"; }
 
-  // trunk
-  for (let i=1; i<=h; i++){
-    setBlock(x, y+i, z, trunk);
-  }
-  // leaves blob
+  const h = (biome === "snow" ? 6 : 5) + Math.floor(rand01_from_xz(gx+17, gz-17) * 3); // 5..7 (snow 6..8)
+  for (let i=1; i<=h; i++) setBlock(x, y+i, z, trunk);
+
   const top = y + h;
-  for (let dy=-2; dy<=2; dy++){
-    for (let dz=-2; dz<=2; dz++){
-      for (let dx=-2; dx<=2; dx++){
-        const d = Math.abs(dx)+Math.abs(dz)+Math.abs(dy);
-        if (d > 5) continue;
-        if (dy==2 && (Math.abs(dx)==2 || Math.abs(dz)==2)) continue;
+  const radius = (biome === "snow") ? 3 : 2;
+  for (let dy=-radius; dy<=radius; dy++){
+    for (let dz=-radius; dz<=radius; dz++){
+      for (let dx=-radius; dx<=radius; dx++){
+        const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
+        if (d > (radius*2 + 1)) continue;
+        if (dy === radius && (Math.abs(dx) === radius || Math.abs(dz) === radius)) continue;
         setBlock(x+dx, top+dy, z+dz, leaves);
       }
     }
