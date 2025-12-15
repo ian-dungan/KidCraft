@@ -121,6 +121,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // =======================
 const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
+
+// Hotbar state
+let activeSlot = 0;
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // Vertical world limits (Minecraft-ish feel)
@@ -409,7 +412,7 @@ function hashColor(code){
   const h = [...code].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7) % 360;
   const s = 0.35;
   const l = 0.55;
-  const [r,g,b] = colorsys.hls_to_rgb(h/360, l, s);
+  const [r,g,b] = /*colorsys_removed*/.hls_to_rgb(h/360, l, s);
   return ((int(r*255)&255)<<16) | ((int(g*255)&255)<<8) | (int(b*255)&255);
 }
 // tiny int helper (avoid Math.floor in hot path for color build)
@@ -947,7 +950,9 @@ function invAdd_LEGACY(code, n=1){
   INV_LEGACY[code] = (INV_LEGACY[code]||0) + n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
-  renderHotbar_LEGACY();
+// legacy hotbar disabled
+renderHotbar();
+
   renderInventoryPanel();
 }
 function invTake(code, n=1){
@@ -956,7 +961,9 @@ function invTake(code, n=1){
   INV_LEGACY[code] = c - n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
-  renderHotbar_LEGACY();
+// legacy hotbar disabled
+renderHotbar();
+
   renderInventoryPanel();
   return true;
 }
@@ -1166,7 +1173,8 @@ function renderHotbar_LEGACY(){
     el.appendChild(slot);
   }
 }
-renderHotbar_LEGACY();
+// legacy hotbar disabled
+renderHotbar();
 
 addEventListener("keydown", (e)=>{
   const n = parseInt(e.key,10);
