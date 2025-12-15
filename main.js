@@ -1420,7 +1420,7 @@ function blockKey(x,y,z){ return `${x},${y},${z}`; }
 // =======================
 const SEA_LEVEL = 24;
 
-function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function clamp_DUP(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 function lerp(a,b,t){ return a + (b-a)*t; }
 function smoothstep(e0, e1, x){
   const t = clamp((x - e0) / (e1 - e0), 0, 1);
