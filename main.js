@@ -1680,11 +1680,14 @@ function matFor(code){
 }
 
 
-function shouldPlaceTallGrass(x,y,z){
-  const _tgChance = (typeof _tgChance === 'number') ? DECOR_TALL_GRASS_CHANCE : 0.08;
-  // Deterministic placement per coordinate (no save needed)
-  const n = (x*73856093) ^ (y*19349663) ^ (z*83492791);
-  return rand01(n>>>0) < DECOR_TALL_GRASS_CHANCE;
+function shouldPlaceTallGrass(x, y, z){
+  // Safe decor chance
+  const chance = (typeof DECOR_TALL_GRASS_CHANCE === "number") ? DECOR_TALL_GRASS_CHANCE : 0.08;
+  // Only place on grass at surface (caller usually ensures), keep deterministic-ish randomness
+  // Use a small hash so tall grass doesn't change every frame.
+  const h = ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) >>> 0;
+  const r = (h % 10000) / 10000; // 0..1
+  return r < chance;
 }
 
 function makeTallGrassMesh(){
