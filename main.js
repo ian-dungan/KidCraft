@@ -1,11 +1,15 @@
-
 // === GUARANTEED GLOBAL HELPERS ===
-if (typeof smoothstep !== 'function') {
-  function smoothstep(a,b,x){
+// In ES modules, function declarations inside blocks are block-scoped.
+// Use globalThis assignment so helpers are truly global.
+if (typeof globalThis.smoothstep !== 'function') {
+  globalThis.smoothstep = function(a,b,x){
     const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
     return t*t*(3 - 2*t);
-  }
+  };
 }
+// Local alias
+const smoothstep = globalThis.smoothstep;
+
 
 // =======================
 // === SUPABASE PERSISTENCE (inventory/world/furnace) ===
