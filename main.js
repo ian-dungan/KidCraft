@@ -125,6 +125,32 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = "https://depvgmvmqapfxjwkkhas.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlcHZnbXZtcWFwZnhqd2traGFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NzkzNzgsImV4cCI6MjA4MDU1NTM3OH0.WLkWVbp86aVDnrWRMb-y4gHmEOs9sRpTwvT8hTmqHC0";
 
+
+// =======================
+// === WORLD SEED + ORIGIN SHIFT ===
+const DEFAULT_WORLD_SEED = "kidcraft";
+function getWorldSeed(){
+  // URL ?seed=... overrides; otherwise localStorage; else default
+  try {
+    const u = new URL(window.location.href);
+    const s = u.searchParams.get("seed");
+    if (s && s.trim()) {
+      localStorage.setItem("kidcraft_seed", s.trim());
+      return s.trim();
+    }
+  } catch {}
+  try {
+    const ls = localStorage.getItem("kidcraft_seed");
+    if (ls && ls.trim()) return ls.trim();
+  } catch {}
+  return DEFAULT_WORLD_SEED;
+}
+const WORLD_SEED = getWorldSeed();
+let WORLD_OFFSET_X = 0; // in blocks (integer)
+let WORLD_OFFSET_Z = 0; // in blocks (integer)
+const ORIGIN_SHIFT_THRESHOLD = 1200; // blocks; shift when player drifts far from origin
+
+
 // Hotbar state
 let activeSlot = 0;
 
@@ -436,6 +462,30 @@ function hashColor(str){
   const b = 80 + ((h >>> 16) & 0x7F);
   return (r << 16) | (g << 8) | b;
 }
+
+function seedHash32(str){
+  const s = String(str ?? "");
+  let h = 2166136261;
+  for (let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+const _SEED_H32 = seedHash32(WORLD_SEED);
+
+function hash2i(x, z){
+  // deterministic 32-bit hash from ints + seed
+  let h = (x|0) * 374761393 ^ (z|0) * 668265263 ^ _SEED_H32;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function rand01_from_xz(x,z){
+  return (hash2i(x,z) % 1000000) / 1000000;
+}
+
+
 // tiny int helper (avoid Math.floor in hot path for color build)
 function int(x){ return x|0; }
 
@@ -1378,15 +1428,18 @@ function smoothstep(e0, e1, x){
 }
 function abs(x){ return x < 0 ? -x : x; }
 
-function biomeAt(x,z){
-  const temp = noise2D(x*0.0008, z*0.0008);                  // -1..1
-  const humid = noise2D((x+999)*0.0008, (z-999)*0.0008);     // -1..1
-  const mount = smoothstep(0.25, 0.65, noise2D(x*0.0012, z*0.0012)); // 0..1
+function biomeAt(x, z){
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
 
-  if (mount > 0.62) return "mountains";
-  if (temp > 0.35 && humid < 0.0) return "desert";
+  const temp = noise2D(gx * 0.0008, gz * 0.0008); // -1..1
+  const humid = noise2D((gx+9999) * 0.0008, (gz-9999) * 0.0008);
+  const m = smoothstep(0.25, 0.75, noise2D(gx * 0.0012, gz * 0.0012));
+
+  if (m > 0.68) return "mountains";
   if (temp < -0.25) return "snow";
-  if (humid > 0.35) return "forest";
+  if (temp > 0.35 && humid < -0.1) return "desert";
+  if (humid > 0.25) return "forest";
   return "plains";
 }
 
@@ -1747,13 +1800,9 @@ function matFor(code){
 
 function shouldPlaceTallGrass(x, y, z){
   const chance = (typeof DECOR_TALL_GRASS_CHANCE === "number") ? DECOR_TALL_GRASS_CHANCE : 0.08;
-  // only on land biomes with grass
-  const b = biomeAt(x,z);
-  if (b === "desert" || b === "snow" || b === "mountains") return false;
-  if (y <= SEA_LEVEL) return false;
-  const h = ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) >>> 0;
-  const r = (h % 10000) / 10000;
-  return r < chance;
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
+  return rand01_from_xz(gx, gz) < chance;
 }
 
 function makeTallGrassMesh(){
@@ -1776,6 +1825,107 @@ function makeTallGrassMesh(){
   g.userData.kind = "decor";
   g.add(a); g.add(b);
   return g;
+}
+
+
+function isAreaMostlyFlat(getH, cx, cz, radius, maxDelta){
+  let minH = 1e9, maxH = -1e9;
+  for (let dz=-radius; dz<=radius; dz++){
+    for (let dx=-radius; dx<=radius; dx++){
+      const h = getH(cx+dx, cz+dz);
+      minH = Math.min(minH, h);
+      maxH = Math.max(maxH, h);
+      if (maxH - minH > maxDelta) return false;
+    }
+  }
+  return true;
+}
+
+function tryPlaceTree(setBlock, x, y, z, biome){
+  // tree types per biome
+  const isSnow = biome === "snow";
+  const isForest = biome === "forest";
+  const isPlains = biome === "plains";
+
+  const density = isForest ? 0.07 : (isPlains ? 0.02 : 0.0);
+  if (density <= 0) return false;
+
+  const gx = x + WORLD_OFFSET_X;
+  const gz = z + WORLD_OFFSET_Z;
+  if (rand01_from_xz(gx, gz) > density) return false;
+
+  const trunk = isSnow ? "spruce_log" : "oak_log";
+  const leaves = isSnow ? "spruce_leaves" : "oak_leaves";
+  const h = 4 + Math.floor(rand01_from_xz(gx+17, gz-17) * 3); // 4..6
+
+  // trunk
+  for (let i=1; i<=h; i++){
+    setBlock(x, y+i, z, trunk);
+  }
+  // leaves blob
+  const top = y + h;
+  for (let dy=-2; dy<=2; dy++){
+    for (let dz=-2; dz<=2; dz++){
+      for (let dx=-2; dx<=2; dx++){
+        const d = Math.abs(dx)+Math.abs(dz)+Math.abs(dy);
+        if (d > 5) continue;
+        if (dy==2 && (Math.abs(dx)==2 || Math.abs(dz)==2)) continue;
+        setBlock(x+dx, top+dy, z+dz, leaves);
+      }
+    }
+  }
+  return true;
+}
+
+function tryPlaceHouse(setBlock, getH, x, z, biome){
+  if (biome !== "plains") return false;
+  // rare per chunk cell
+  const gx = x + WORLD_OFFSET_X;
+  const gz = z + WORLD_OFFSET_Z;
+  if (rand01_from_xz(gx*3, gz*3) > 0.002) return false; // ~1 per 500 blocks^2
+
+  // choose center and check flatness
+  const y = getH(x, z);
+  if (y < SEA_LEVEL+1) return false;
+  if (!isAreaMostlyFlat(getH, x, z, 4, 2)) return false;
+
+  const w = 7, d = 9, h = 5;
+  const floor = "oak_planks";
+  const wall = "oak_log";
+  const roof = "oak_planks";
+  const air = "air";
+
+  // floor + clear
+  for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+    for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+      setBlock(x+dx, y, z+dz, floor);
+      for (let dy=1; dy<=h+1; dy++){
+        setBlock(x+dx, y+dy, z+dz, air);
+      }
+    }
+  }
+  // walls
+  for (let dy=1; dy<=h; dy++){
+    for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+      setBlock(x-Math.floor(w/2), y+dy, z+dz, wall);
+      setBlock(x+Math.floor(w/2), y+dy, z+dz, wall);
+    }
+    for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+      setBlock(x+dx, y+dy, z-Math.floor(d/2), wall);
+      setBlock(x+dx, y+dy, z+Math.floor(d/2), wall);
+    }
+  }
+  // door opening on south wall
+  setBlock(x, y+1, z+Math.floor(d/2), air);
+  setBlock(x, y+2, z+Math.floor(d/2), air);
+
+  // roof (simple flat)
+  for (let dz=-Math.floor(d/2); dz<=Math.floor(d/2); dz++){
+    for (let dx=-Math.floor(w/2); dx<=Math.floor(w/2); dx++){
+      setBlock(x+dx, y+h+1, z+dz, roof);
+    }
+  }
+  return true;
 }
 
 function buildChunk(cx, cz){
@@ -2506,6 +2656,43 @@ function maybePlayFootsteps(){
   lastStepTime = now;
   const code = surfaceCodeUnderPlayer();
   playSfx(stepSfxNameFor(code), 0.08);
+}
+
+
+function maybeOriginShift(){
+  if (!controls || !controls.object) return;
+  const px = controls.object.position.x;
+  const pz = controls.object.position.z;
+  if (Math.abs(px) < ORIGIN_SHIFT_THRESHOLD && Math.abs(pz) < ORIGIN_SHIFT_THRESHOLD) return;
+
+  const sx = Math.trunc(px);
+  const sz = Math.trunc(pz);
+  WORLD_OFFSET_X += sx;
+  WORLD_OFFSET_Z += sz;
+
+  // shift player back near origin
+  controls.object.position.x -= sx;
+  controls.object.position.z -= sz;
+
+  // shift world meshes
+  try {
+    for (const ch of chunks.values ? chunks.values() : []){
+      if (ch && ch.mesh) {
+        ch.mesh.position.x -= sx;
+        ch.mesh.position.z -= sz;
+      }
+    }
+  } catch {}
+  try {
+    for (const d of (typeof drops !== "undefined" ? drops : [])){
+      if (d && d.mesh){
+        d.mesh.position.x -= sx;
+        d.mesh.position.z -= sz;
+      }
+    }
+  } catch {}
+
+  console.log("[World] Origin shifted by", sx, sz, "new offsets:", WORLD_OFFSET_X, WORLD_OFFSET_Z);
 }
 
 function animate(){
