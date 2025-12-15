@@ -180,17 +180,15 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const DEFAULT_WORLD_SEED = "kidcraft";
 function getWorldSeed(){
   // URL ?seed=... overrides; otherwise localStorage; else default
-  try {const u = new URL(window.location.href);
+  {const u = new URL(window.location.href);
     const s = u.searchParams.get("seed");
     if (s && s.trim()) {
       localStorage.setItem("kidcraft_seed", s.trim());
       return s.trim();
     }
-  } catch {}
-  try {const ls = localStorage.getItem("kidcraft_seed");
+  }{const ls = localStorage.getItem("kidcraft_seed");
     if (ls && ls.trim()) return ls.trim();
-  } catch {}
-  return DEFAULT_WORLD_SEED;
+  }return DEFAULT_WORLD_SEED;
 }
 const WORLD_SEED = getWorldSeed();
 let WORLD_OFFSET_X = 0; // in blocks (integer)
@@ -556,7 +554,7 @@ function pickCommonHotbar(materials){
 }
 
 async function loadMaterialsFromDB(){
-  try{
+  {
     const { data, error } = await supabase
       .from("materials")
       .select("code, display_name, category, tags, hardness, props")
@@ -577,10 +575,7 @@ async function loadMaterialsFromDB(){
     }
     MATERIALS_READY = true;
     console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
-  }catch(e){
-    console.warn("[Materials] load exception:", e);
-  }
-}
+  }}
 
 
 
@@ -970,13 +965,12 @@ let audioUnlocked = false;
 
 function unlockAudio(){
   if (audioUnlocked) return;
-  try{
+  {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     // iOS/Chrome: resume on user gesture
     audioCtx.resume?.();
     audioUnlocked = true;
-  }catch{}
-}
+  }}
 window.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
 window.addEventListener("touchstart", unlockAudio, { once: true, passive: true });
 
@@ -1054,14 +1048,12 @@ function invStorageKey(){
   return "kidcraft_inv_" + u;
 }
 function invLoad(){
-  try{
+  {
     const raw = localStorage.getItem(invStorageKey());
     INV_LEGACY = raw ? JSON.parse(raw) : {};
-  }catch(e){ INV_LEGACY = {}; }
-}
+  }}
 function invSave(){
-  try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }catch(e){}
-}
+  { localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }}
 function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
 // [DEDUP] renamed duplicate declaration of 'invAdd' at line 966 -> 'invAdd_DUP2'
 function invAdd_DUP2(code, n=1){
@@ -2666,7 +2658,7 @@ function subscribeRealtime(){
 function cacheKey(world_id){ return `kidcraft_edits_${world_id}`; }
 
 function loadCachedEdits(world_id){
-  try{
+  {
     const raw = localStorage.getItem(cacheKey(world_id));
     if (!raw) return;
     const obj = JSON.parse(raw);
@@ -2678,11 +2670,10 @@ function loadCachedEdits(world_id){
       worldEdits.set(ck, map);
       map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
     }
-  }catch{}
-}
+  }}
 
 function cacheEdit(world_id, x,y,z, code){
-  try{
+  {
     const key = cacheKey(world_id);
     const raw = localStorage.getItem(key);
     const obj = raw ? JSON.parse(raw) : {};
@@ -2694,8 +2685,7 @@ function cacheEdit(world_id, x,y,z, code){
       for (let i=0;i<500;i++) delete obj[keys[i]];
     }
     localStorage.setItem(key, JSON.stringify(obj));
-  }catch{}
-}
+  }}
 
 // =======================
 // LOGIN FLOW BOOTSTRAP
