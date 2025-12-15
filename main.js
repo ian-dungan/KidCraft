@@ -180,16 +180,14 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const DEFAULT_WORLD_SEED = "kidcraft";
 function getWorldSeed(){
   // URL ?seed=... overrides; otherwise localStorage; else default
-  { // FIX: removed dangling try
-    const u = new URL(window.location.href);
+  try {const u = new URL(window.location.href);
     const s = u.searchParams.get("seed");
     if (s && s.trim()) {
       localStorage.setItem("kidcraft_seed", s.trim());
       return s.trim();
     }
   } catch {}
-  { // FIX: removed dangling try
-    const ls = localStorage.getItem("kidcraft_seed");
+  try {const ls = localStorage.getItem("kidcraft_seed");
     if (ls && ls.trim()) return ls.trim();
   } catch {}
   return DEFAULT_WORLD_SEED;
