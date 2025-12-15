@@ -180,7 +180,7 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const DEFAULT_WORLD_SEED = "kidcraft";
 function getWorldSeed(){
   // URL ?seed=... overrides; otherwise localStorage; else default
-  try {
+  { // FIX: removed dangling try
     const u = new URL(window.location.href);
     const s = u.searchParams.get("seed");
     if (s && s.trim()) {
@@ -188,7 +188,7 @@ function getWorldSeed(){
       return s.trim();
     }
   } catch {}
-  try {
+  { // FIX: removed dangling try
     const ls = localStorage.getItem("kidcraft_seed");
     if (ls && ls.trim()) return ls.trim();
   } catch {}
@@ -206,7 +206,7 @@ let activeSlot = 0;
 // Hotbar renderer (shim)
 // Some legacy paths call renderHotbar(); keep it defined.
 function renderHotbar(){
-  try {
+  { // FIX: removed dangling try
     if (typeof renderHotbarModern === "function") return renderHotbarModern();
     if (typeof renderHotbar_LEGACY === "function") return renderHotbar_LEGACY();
   } catch (e) {
@@ -381,7 +381,7 @@ ui.guest.onclick = async () => {
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
 
-  try {
+  { // FIX: removed dangling try
     const sess = await supabase.auth.getSession();
     const uid = sess?.data?.session?.user?.id;
     if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
@@ -646,7 +646,7 @@ document.body.addEventListener("click", () => {
   // Guard: only request lock if supported and not already locked.
   if (!document.body.requestPointerLock) return;
   if (document.pointerLockElement) return;
-  try { controls.lock(); } catch {}
+  { // FIX: removed dangling try controls.lock(); } catch {}
 });
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -812,7 +812,7 @@ const drops = []; // {mesh, code, qty, vel:THREE.Vector3, born:number}
 
 function dropColor(code){
   // simple stable color; use block color when possible
-  try { return colorFor(code); } catch { }
+  { // FIX: removed dangling try return colorFor(code); } catch { }
   const h = [...String(code)].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7);
   const r = 80 + (h & 127);
   const g = 80 + ((h>>>7) & 127);
@@ -885,7 +885,7 @@ async function pickupDrop(idx){
   invAdd(d.code, d.qty);
   // persist
   if (typeof supaUpsertInventory === "function") {
-    try { await supaUpsertInventory(d.code); } catch {}
+    { // FIX: removed dangling try await supaUpsertInventory(d.code); } catch {}
   }
   // remove mesh
   scene.remove(d.mesh);
@@ -1411,7 +1411,7 @@ ui.gyro.addEventListener("change", async () => {
   if (!ui.gyro.checked) { gyroEnabled = false; lastAlpha = lastBeta = null; return; }
   // iOS requires user gesture + permission request
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-    try {
+    { // FIX: removed dangling try
       const res = await DeviceOrientationEvent.requestPermission();
       if (res !== "granted") { ui.gyro.checked = false; return; }
     } catch {
@@ -2473,7 +2473,7 @@ async function pullNearbyWorldBlocks(){
 
 function clearRealtime(){
   for (const ch of realtimeChannels){
-    try { supabase.removeChannel(ch); } catch {}
+    { // FIX: removed dangling try supabase.removeChannel(ch); } catch {}
   }
   realtimeChannels = [];
 }
@@ -2708,7 +2708,7 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
     setStatus("Auth OK. Creating profile...");
-    try { selfUsername = await ensurePlayerProfile(sess);
+    { // FIX: removed dangling try selfUsername = await ensurePlayerProfile(sess);
       await refreshSelfProfile();
       startMobTickerIfAllowed(); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
     setStatus("Joining world...");
@@ -2732,9 +2732,9 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
     if (chat.root) chat.root.style.display = "";
-    try { await loadRecentChat(); } catch {}
-    try { await loadRecipes(); } catch {}
-    try { await loadMobs(); } catch {}
+    { // FIX: removed dangling try await loadRecentChat(); } catch {}
+    { // FIX: removed dangling try await loadRecipes(); } catch {}
+    { // FIX: removed dangling try await loadMobs(); } catch {}
 
   } else {
     clearRealtime();
@@ -2827,7 +2827,7 @@ function maybeOriginShift(){
   controls.object.position.z -= sz;
 
   // shift world meshes
-  try {
+  { // FIX: removed dangling try
     for (const g of (typeof chunkMeshes !== 'undefined' ? chunkMeshes.values() : [])){
       if (g && g.position) {
         g.position.x -= sx;
@@ -2836,7 +2836,7 @@ function maybeOriginShift(){
     }
     }
   } catch {}
-  try {
+  { // FIX: removed dangling try
     for (const d of (typeof drops !== "undefined" ? drops : [])){
       if (d && d.mesh){
         d.mesh.position.x -= sx;
