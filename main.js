@@ -944,12 +944,12 @@ function invSave(){
   try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }catch(e){}
 }
 function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
-function invAdd(code, n=1){
+function invAdd_LEGACY(code, n=1){
   if (!code) return;
   INV_LEGACY[code] = (INV_LEGACY[code]||0) + n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
-  renderHotbar();
+  renderHotbar_LEGACY();
   renderInventoryPanel();
 }
 function invTake(code, n=1){
@@ -958,18 +958,18 @@ function invTake(code, n=1){
   INV_LEGACY[code] = c - n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
-  renderHotbar();
+  renderHotbar_LEGACY();
   renderInventoryPanel();
   return true;
 }
-function invHas(inputs){
+function invHas_LEGACY(inputs){
   for (const [code, n] of inputs){
     if (invCount(code) < n) return false;
   }
   return true;
 }
-function invConsume(inputs){
-  if (!invHas(inputs)) return false;
+function invConsume_LEGACY(inputs){
+  if (!invHas_LEGACY(inputs)) return false;
   for (const [code,n] of inputs) invTake(code,n);
   return true;
 }
@@ -977,15 +977,15 @@ function invConsume(inputs){
 // Starting kit (Minecraft-ish vibe; tweak as you like)
 function ensureStarterKit(){
   if (localStorage.getItem(invStorageKey()+"_init")) return;
-  invAdd("dirt", 32);
-  invAdd("grass_block", 16);
-  invAdd("cobblestone", 24);
-  invAdd("oak_log", 8);
-  invAdd("oak_planks", 16);
+  invAdd_LEGACY("dirt", 32);
+  invAdd_LEGACY("grass_block", 16);
+  invAdd_LEGACY("cobblestone", 24);
+  invAdd_LEGACY("oak_log", 8);
+  invAdd_LEGACY("oak_planks", 16);
   // starter tools
-  invAdd("wooden_pickaxe", 1);
-  invAdd("wooden_shovel", 1);
-  invAdd("wooden_axe", 1);
+  invAdd_LEGACY("wooden_pickaxe", 1);
+  invAdd_LEGACY("wooden_shovel", 1);
+  invAdd_LEGACY("wooden_axe", 1);
   localStorage.setItem(invStorageKey()+"_init","1");
 }
 
@@ -1087,15 +1087,15 @@ function renderInventoryPanel(){
   // recipes
   recEl.innerHTML = "";
   for (const r of RECIPES){
-    const ok = invHas(r.in);
+    const ok = invHas_LEGACY(r.in);
     const btn = document.createElement("button");
     btn.className = "inv-recipe" + (ok ? "" : " disabled");
     btn.disabled = !ok;
     const req = r.in.map(([c,n])=>`${c}x${n}`).join(", ");
     btn.innerHTML = `<div class="inv-recipe-name">${r.name}</div><div class="inv-recipe-req">${req}</div>`;
     btn.onclick = ()=>{
-      if (!invConsume(r.in)) return;
-      invAdd(r.out[0], r.out[1]);
+      if (!invConsume_LEGACY(r.in)) return;
+      invAdd_LEGACY(r.out[0], r.out[1]);
       setHint(`Crafted ${r.out[0]}x${r.out[1]}`);
       playSfx("place", 0.06);
       swingHotbar();
@@ -1104,7 +1104,7 @@ function renderInventoryPanel(){
   }
 }
 
-function renderHotbar(){
+function renderHotbar_LEGACY(){
   const el = document.getElementById("hotbar");
   if (!el) return;
   el.innerHTML = "";
@@ -1163,16 +1163,16 @@ function renderHotbar(){
 
     slot.appendChild(icon);
     slot.appendChild(label);
-    slot.onclick = ()=>{ activeSlot=i; renderHotbar(); };
+    slot.onclick = ()=>{ activeSlot=i; renderHotbar_LEGACY(); };
 
     el.appendChild(slot);
   }
 }
-renderHotbar();
+renderHotbar_LEGACY();
 
 addEventListener("keydown", (e)=>{
   const n = parseInt(e.key,10);
-  if (n>=1 && n<=9){ hotbarIndex = n-1; renderHotbar(); }
+  if (n>=1 && n<=9){ hotbarIndex = n-1; renderHotbar_LEGACY(); }
 });
 
 // =======================
