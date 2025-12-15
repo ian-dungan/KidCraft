@@ -2828,11 +2828,12 @@ function maybeOriginShift(){
 
   // shift world meshes
   try {
-    for (const ch of chunks.values ? chunks.values() : []){
-      if (ch && ch.mesh) {
-        ch.mesh.position.x -= sx;
-        ch.mesh.position.z -= sz;
+    for (const g of (typeof chunkMeshes !== 'undefined' ? chunkMeshes.values() : [])){
+      if (g && g.position) {
+        g.position.x -= sx;
+        g.position.z -= sz;
       }
+    }
     }
   } catch {}
   try {
