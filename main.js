@@ -963,7 +963,8 @@ function invSave(){
   try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }catch(e){}
 }
 function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
-function invAdd(code, n=1){
+// [DEDUP] renamed duplicate declaration of 'invAdd' at line 966 -> 'invAdd_DUP2'
+function invAdd_DUP2(code, n=1){
   if (!code) return;
   INV_LEGACY[code] = (INV_LEGACY[code]||0) + n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
