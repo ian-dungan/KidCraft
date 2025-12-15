@@ -1392,3 +1392,135 @@ drop policy if exists "mobs_select" on public.mobs;
 DROP POLICY IF EXISTS "mobs_select" ON public.mobs;
 create policy "mobs_select" on public.mobs for select to authenticated using (true);
 
+
+
+-- KIDCRAFT_SURVIVAL_TABLES
+
+-- Core survival persistence tables (idempotent)
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_player_inventory (
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  code text NOT NULL,
+  qty integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_world_block_edits (
+  world text NOT NULL DEFAULT 'default',
+  x integer NOT NULL,
+  y integer NOT NULL,
+  z integer NOT NULL,
+  chunk_x integer NOT NULL,
+  chunk_z integer NOT NULL,
+  code text NOT NULL,
+  user_id uuid NULL REFERENCES auth.users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (world, x, y, z)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kidcraft_world_edits_chunk
+ON public.kidcraft_world_block_edits(world, chunk_x, chunk_z);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_smelting_recipes (
+  id bigserial PRIMARY KEY,
+  input_code text NOT NULL,
+  output_code text NOT NULL,
+  cook_time_ms integer NOT NULL DEFAULT 10000
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kidcraft_smelting_input
+ON public.kidcraft_smelting_recipes(input_code);
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_furnaces (
+  world text NOT NULL DEFAULT 'default',
+  x integer NOT NULL,
+  y integer NOT NULL,
+  z integer NOT NULL,
+  input_code text NULL,
+  input_qty integer NOT NULL DEFAULT 0,
+  fuel_code text NULL,
+  fuel_qty integer NOT NULL DEFAULT 0,
+  output_code text NULL,
+  output_qty integer NOT NULL DEFAULT 0,
+  -- server-timestamped processing
+  is_burning boolean NOT NULL DEFAULT false,
+  burn_started_at timestamptz NULL,
+  burn_ends_at timestamptz NULL,
+  smelt_started_at timestamptz NULL,
+  smelt_ends_at timestamptz NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (world, x, y, z)
+);
+
+-- Enable RLS and policies (re-runnable)
+ALTER TABLE public.kidcraft_player_inventory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kidcraft_world_block_edits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kidcraft_furnaces ENABLE ROW LEVEL SECURITY;
+
+-- Inventory: owner read/write
+DROP POLICY IF EXISTS inv_owner_rw ON public.kidcraft_player_inventory;
+CREATE POLICY inv_owner_rw
+ON public.kidcraft_player_inventory
+FOR ALL
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+
+-- World edits: read all, write authenticated
+DROP POLICY IF EXISTS world_edits_read ON public.kidcraft_world_block_edits;
+CREATE POLICY world_edits_read
+ON public.kidcraft_world_block_edits
+FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS world_edits_write ON public.kidcraft_world_block_edits;
+CREATE POLICY world_edits_write
+ON public.kidcraft_world_block_edits
+FOR INSERT
+WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS world_edits_update ON public.kidcraft_world_block_edits;
+CREATE POLICY world_edits_update
+ON public.kidcraft_world_block_edits
+FOR UPDATE
+USING (auth.uid() IS NOT NULL)
+WITH CHECK (auth.uid() IS NOT NULL);
+
+-- Furnaces: read all, write authenticated
+DROP POLICY IF EXISTS furnaces_read ON public.kidcraft_furnaces;
+CREATE POLICY furnaces_read
+ON public.kidcraft_furnaces
+FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS furnaces_write ON public.kidcraft_furnaces;
+CREATE POLICY furnaces_write
+ON public.kidcraft_furnaces
+FOR ALL
+USING (auth.uid() IS NOT NULL)
+WITH CHECK (auth.uid() IS NOT NULL);
+
+
+
+-- KIDCRAFT_RECIPES
+
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipes (
+  id bigserial PRIMARY KEY,
+  station text NOT NULL DEFAULT 'inventory',
+  width integer NOT NULL DEFAULT 2,
+  height integer NOT NULL DEFAULT 2,
+  output_code text NOT NULL,
+  output_qty integer NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS public.kidcraft_recipe_ingredients (
+  recipe_id bigint NOT NULL REFERENCES public.kidcraft_recipes(id) ON DELETE CASCADE,
+  code text NOT NULL,
+  qty integer NOT NULL DEFAULT 1,
+  PRIMARY KEY (recipe_id, code)
+);
+ALTER TABLE public.kidcraft_recipes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kidcraft_recipe_ingredients ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS recipes_read ON public.kidcraft_recipes;
+CREATE POLICY recipes_read ON public.kidcraft_recipes FOR SELECT USING (true);
+DROP POLICY IF EXISTS recipe_ing_read ON public.kidcraft_recipe_ingredients;
+CREATE POLICY recipe_ing_read ON public.kidcraft_recipe_ingredients FOR SELECT USING (true);
