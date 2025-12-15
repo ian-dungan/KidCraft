@@ -407,13 +407,18 @@ let ORE_CODES = [];              // codes tagged 'ore'
 let COMMON_BLOCKS = [];          // curated list for hotbar
 let MATERIALS_READY = false;
 
-function hashColor(code){
-  // deterministic pleasing color for materials lacking explicit color props
-  const h = [...code].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7) % 360;
-  const s = 0.35;
-  const l = 0.55;
-  const [r,g,b] = /*colorsys_removed*/.hls_to_rgb(h/360, l, s);
-  return ((int(r*255)&255)<<16) | ((int(g*255)&255)<<8) | (int(b*255)&255);
+function hashColor(str){
+  // Deterministic color without external libs (no colorsys dependency)
+  const s = String(str ?? "");
+  let h = 2166136261; // FNV-1a 32-bit
+  for (let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const r = 80 + (h & 0x7F);
+  const g = 80 + ((h >>> 8) & 0x7F);
+  const b = 80 + ((h >>> 16) & 0x7F);
+  return (r << 16) | (g << 8) | b;
 }
 // tiny int helper (avoid Math.floor in hot path for color build)
 function int(x){ return x|0; }
