@@ -1463,7 +1463,7 @@ function getStoneFill(x,y,z){
   if (v < baseChance){
     return pickOreByDepth(y);
   }
-  return getStoneFill(x,y,z);
+  return "stone";
 }
 
 function getBlockCode(x,y,z){
@@ -1484,7 +1484,7 @@ function getBlockCode(x,y,z){
   if (y >= h-3) return "dirt";
   // Caves: carve underground air pockets/tubes
   if (isCaveAir(x,y,z,h)) return "air";
-  return getStoneFill(x,y,z);
+  return "stone";
 }
 
 const geom = new THREE.BoxGeometry(1,1,1);
