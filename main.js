@@ -124,6 +124,19 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // Hotbar state
 let activeSlot = 0;
+
+// Hotbar renderer (shim)
+// Some legacy paths call renderHotbar(); keep it defined.
+function renderHotbar(){
+  try {
+    if (typeof renderHotbarModern === "function") return renderHotbarModern();
+    if (typeof renderHotbar_LEGACY === "function") return renderHotbar_LEGACY();
+  } catch (e) {
+    console.warn("[HUD] renderHotbar shim exception", e);
+  }
+}
+
+
 const WORLD_SLUG = "overworld"; // matches SQL seed
 
 // Vertical world limits (Minecraft-ish feel)
@@ -950,13 +963,13 @@ function invSave(){
   try{ localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }catch(e){}
 }
 function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
-function invAdd_LEGACY(code, n=1){
+function invAdd(code, n=1){
   if (!code) return;
   INV_LEGACY[code] = (INV_LEGACY[code]||0) + n;
   if (INV_LEGACY[code] <= 0) delete INV_LEGACY[code];
   invSave();
 // legacy hotbar disabled
-renderHotbar();
+renderHotbar_LEGACY && renderHotbar_LEGACY();
 
   renderInventoryPanel();
 }
@@ -987,15 +1000,15 @@ function invConsume_LEGACY(inputs){
 // Starting kit (Minecraft-ish vibe; tweak as you like)
 function ensureStarterKit(){
   if (localStorage.getItem(invStorageKey()+"_init")) return;
-  invAdd_LEGACY("dirt", 32);
-  invAdd_LEGACY("grass_block", 16);
-  invAdd_LEGACY("cobblestone", 24);
-  invAdd_LEGACY("oak_log", 8);
-  invAdd_LEGACY("oak_planks", 16);
+  invAdd("dirt", 32);
+  invAdd("grass_block", 16);
+  invAdd("cobblestone", 24);
+  invAdd("oak_log", 8);
+  invAdd("oak_planks", 16);
   // starter tools
-  invAdd_LEGACY("wooden_pickaxe", 1);
-  invAdd_LEGACY("wooden_shovel", 1);
-  invAdd_LEGACY("wooden_axe", 1);
+  invAdd("wooden_pickaxe", 1);
+  invAdd("wooden_shovel", 1);
+  invAdd("wooden_axe", 1);
   localStorage.setItem(invStorageKey()+"_init","1");
 }
 
@@ -1105,7 +1118,7 @@ function renderInventoryPanel(){
     btn.innerHTML = `<div class="inv-recipe-name">${r.name}</div><div class="inv-recipe-req">${req}</div>`;
     btn.onclick = ()=>{
       if (!invConsume_LEGACY(r.in)) return;
-      invAdd_LEGACY(r.out[0], r.out[1]);
+      invAdd(r.out[0], r.out[1]);
       setHint(`Crafted ${r.out[0]}x${r.out[1]}`);
       playSfx("place", 0.06);
       swingHotbar();
