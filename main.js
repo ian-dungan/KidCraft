@@ -1,5 +1,8 @@
 // =======================
 // === SUPABASE PERSISTENCE (inventory/world/furnace) ===
+
+// Global decor defaults (safe)
+var DECOR_TALL_GRASS_CHANCE = 0.08;
 const WORLD_EDITS_CACHE = new Map(); // key cx,cz -> array edits
 
 const WORLD_ID = "default";
@@ -1678,6 +1681,7 @@ function matFor(code){
 
 
 function shouldPlaceTallGrass(x,y,z){
+  const _tgChance = (typeof _tgChance === 'number') ? DECOR_TALL_GRASS_CHANCE : 0.08;
   // Deterministic placement per coordinate (no save needed)
   const n = (x*73856093) ^ (y*19349663) ^ (z*83492791);
   return rand01(n>>>0) < DECOR_TALL_GRASS_CHANCE;
