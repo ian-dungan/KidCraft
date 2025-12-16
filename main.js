@@ -1657,7 +1657,7 @@ function isPlaceableBlock(code){
 }
 
 function isSolidCode(code){
-  return code && code !== "air" && code !== "__air__";
+  return code && code !== "air" && code !== "__air__" && code !== "water";
 }
 
 function pickOreByDepth(y){
@@ -3159,7 +3159,8 @@ function groundHeightAt(x,z){
   const startY = Math.floor(controls.object.position.y);
   for (let y = startY; y >= MIN_Y; y--){
     const code = getBlockCode(wx, y, wz);
-    if (code !== "air"){
+    // Only count actually solid blocks (not air, water, or undefined)
+    if (code && isSolidCode(code)){
       return y + 1.0;
     }
   }
@@ -3365,10 +3366,16 @@ function animate(){
   player.velocityY -= 25 * dt;
   pos.y += player.velocityY * dt;
 
-  if (pos.y < baseEye){
-    pos.y = baseEye;
-    player.velocityY = 0;
-    player.grounded = true;
+  // Only snap to ground if we're close and moving down
+  // This prevents teleporting when digging or touching blocks
+  if (pos.y < baseEye && player.velocityY <= 0){
+    const distToGround = baseEye - pos.y;
+    // Only snap if within reasonable distance (not huge teleport)
+    if (distToGround < 3.0) {
+      pos.y = baseEye;
+      player.velocityY = 0;
+      player.grounded = true;
+    }
   } else {
     player.grounded = false;
   }
