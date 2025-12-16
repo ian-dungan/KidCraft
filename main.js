@@ -633,6 +633,9 @@ document.body.addEventListener("click", () => {
   // Guard: only request lock if supported and not already locked.
   if (!document.body.requestPointerLock) return;
   if (document.pointerLockElement) return;
+  document.body.requestPointerLock();
+});
+
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
@@ -797,6 +800,8 @@ const drops = []; // {mesh, code, qty, vel:THREE.Vector3, born:number}
 
 function dropColor(code){
   // simple stable color; use block color when possible
+  return colorFor(code);
+}
 
 function makeDropMesh(code){
   // small billboarded quad (like an item sprite)
@@ -2442,6 +2447,8 @@ async function pullNearbyWorldBlocks(){
 
 function clearRealtime(){
   for (const ch of realtimeChannels){
+    ch.unsubscribe();
+  }
   realtimeChannels = [];
 }
 
@@ -2779,14 +2786,13 @@ function maybeOriginShift(){
   controls.object.position.z -= sz;
 
   // shift world meshes
-  { // FIX: removed dangling try
-    for (const g of (typeof chunkMeshes !== 'undefined' ? chunkMeshes.values() : [])){
-      if (g && g.position) {
-        g.position.x -= sx;
-        g.position.z -= sz;
-      }
+  for (const g of (typeof chunkMeshes !== 'undefined' ? chunkMeshes.values() : [])){
+    if (g && g.position) {
+      g.position.x -= sx;
+      g.position.z -= sz;
     }
-    }
+  }
+}
 
 function animate(){
   requestAnimationFrame(animate);
