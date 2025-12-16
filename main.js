@@ -3750,3 +3750,51 @@ function initFurnaceUI(){
 
 // Initialize furnace UI
 initFurnaceUI();
+// ============================================================
+// DEBUG EXPORTS - For console testing
+// ============================================================
+window.DEBUG = {
+  terrainHeight,
+  noise2D: () => noise2D,
+  getBlockCode,
+  worldId: () => worldId,
+  camera,
+  SEA_LEVEL,
+  CHUNK_SIZE,
+  player: () => player,
+  worldEdits: () => worldEdits,
+  chunkMeshes: () => chunkMeshes,
+  rebuildChunk,
+  applyEditLocal,
+  MATERIAL_DEFS,
+  // Test terrain at a position
+  testTerrain: (x, z) => {
+    const h = terrainHeight(x, z);
+    const block = getBlockCode(x, h, z);
+    const blockAbove = getBlockCode(x, h+1, z);
+    const blockBelow = getBlockCode(x, h-1, z);
+    console.log(`=== Terrain at (${x}, ${z}) ===`);
+    console.log(`Height: ${h}`);
+    console.log(`Surface block: ${block}`);
+    console.log(`Block above (+1): ${blockAbove}`);
+    console.log(`Block below (-1): ${blockBelow}`);
+    console.log(`Noise value: ${noise2D(x*0.002, z*0.002)}`);
+    return { height: h, surface: block, above: blockAbove, below: blockBelow };
+  },
+  // Test multiple positions
+  testArea: () => {
+    console.log("=== AREA TEST (5x5 around origin) ===");
+    for (let z = -2; z <= 2; z++) {
+      let row = "";
+      for (let x = -2; x <= 2; x++) {
+        const h = terrainHeight(x, z);
+        row += h.toString().padStart(3) + " ";
+      }
+      console.log(row);
+    }
+  }
+};
+
+console.log("[Debug] DEBUG tools available via window.DEBUG");
+console.log("[Debug] Try: DEBUG.testTerrain(0, 0)");
+console.log("[Debug] Try: DEBUG.testArea()");
