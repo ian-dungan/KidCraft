@@ -18,7 +18,12 @@
   <link rel="icon" href="data:," />
 </head>
 <body>
-  <!-- AUTH UI -->
+  <!-- Game Container (initially hidden) -->
+  <div id="game-container">
+    <!-- Canvas will be appended here -->
+  </div>
+
+  <!-- AUTH UI (full screen login) -->
   <div id="auth">
     <input id="username" placeholder="Username" autocomplete="username"/>
     <input id="password" type="password" placeholder="Password" autocomplete="current-password"/>
@@ -52,7 +57,7 @@
   <div id="touch-left" aria-hidden="true"></div>
   <div id="touch-right" aria-hidden="true"></div>
 
-  <script type="module" src="main.js?v=MP29"></script>
+  <script type="module" src="main.js?v=MP31"></script>
 
   <!-- Chat -->
   <div id="chat" aria-live="polite">

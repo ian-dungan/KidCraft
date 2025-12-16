@@ -273,21 +273,43 @@ function isAnonymousSession(sess){
 async function ensurePlayerProfile(session){
     const user_id = session.user.id;
     let username = getPreferredUsername() || `player_${user_id.slice(0,8)}`;
+    
+    console.log("[Profile] Creating profile for user:", user_id);
+    console.log("[Profile] Username:", username);
 
-    let { error } = await supabase
+    let { data, error } = await supabase
         .from("player_profiles")
-        .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
+        .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" })
+        .select()
+        .single();
 
-    if (error && /username|duplicate/i.test(error.message || "")) {
-        username = `${username}_${Math.random().toString(36).slice(2,6)}`;
-        savePreferredUsername(username);
-        const res2 = await supabase
-            .from("player_profiles")
-            .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" });
-        if (res2.error) throw res2.error;
-        return username;
+    if (error) {
+        console.error("[Profile] UPSERT failed:", error);
+        console.error("[Profile] Error code:", error.code);
+        console.error("[Profile] Error message:", error.message);
+        console.error("[Profile] Error details:", error.details);
+        
+        // Handle duplicate username
+        if (/username|duplicate/i.test(error.message || "")) {
+            console.log("[Profile] Username conflict, trying with suffix...");
+            username = `${username}_${Math.random().toString(36).slice(2,6)}`;
+            savePreferredUsername(username);
+            const res2 = await supabase
+                .from("player_profiles")
+                .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" })
+                .select()
+                .single();
+            if (res2.error) {
+                console.error("[Profile] Retry failed:", res2.error);
+                throw res2.error;
+            }
+            console.log("[Profile] Created with suffix:", username);
+            return username;
+        }
+        throw error;
     }
-    if (error) throw error;
+    
+    console.log("[Profile] Successfully created/updated:", data);
     savePreferredUsername(username);
     return username;
 }
@@ -614,7 +636,12 @@ camera.rotation.order = "YXZ";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-document.body.appendChild(renderer.domElement);
+const gameContainer = document.getElementById('game-container');
+if (!gameContainer) {
+  console.error("Game container not found!");
+} else {
+  gameContainer.appendChild(renderer.domElement);
+}
 
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -623,7 +650,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 
-const controls = new PointerLockControls(camera, document.body);
+const controls = new PointerLockControls(camera, gameContainer);
 scene.add(controls.object);
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
@@ -653,15 +680,39 @@ cross.style.position="fixed"; cross.style.left="50%"; cross.style.top="50%";
 cross.style.width="10px"; cross.style.height="10px"; cross.style.marginLeft="-5px"; cross.style.marginTop="-5px";
 cross.style.border="2px solid rgba(255,255,255,0.65)"; cross.style.borderRadius="50%";
 cross.style.zIndex="8000"; cross.style.pointerEvents="none";
-document.body.appendChild(cross);
+gameContainer.appendChild(cross);
 
 // Click to lock on desktop
-document.body.addEventListener("click", () => {
+gameContainer.addEventListener("click", (e) => {
   if (isMobile()) return;
-  // Guard: only request lock if supported and not already locked.
-  if (!document.body.requestPointerLock) return;
+  
+  // Don't lock if game container isn't visible
+  if (!gameContainer.classList.contains('active')) return;
+  
+  // Guard: only request lock if supported and not already locked
+  if (!gameContainer.requestPointerLock) return;
   if (document.pointerLockElement) return;
-  document.body.requestPointerLock();
+  
+  // Request with error handling
+  try {
+    gameContainer.requestPointerLock();
+  } catch (err) {
+    console.warn("[PointerLock] Failed to request lock:", err);
+  }
+}, { passive: true });
+
+// Handle pointer lock errors
+document.addEventListener('pointerlockerror', () => {
+  console.warn("[PointerLock] Pointer lock error - try clicking the game screen again");
+});
+
+// Handle pointer lock change
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement) {
+    console.log("[PointerLock] Locked");
+  } else {
+    console.log("[PointerLock] Unlocked - click to lock again");
+  }
 });
 
 function isMobile(){
@@ -2850,19 +2901,35 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
 
-    // Hide auth panel after login, show chat
+    // Hide auth panel after login, show game
     const authPanel = document.getElementById("auth");
+    const gameContainer = document.getElementById("game-container");
+    
     if (authPanel) {
-      authPanel.style.display = "none";
+      authPanel.classList.add('hidden');
       console.log("[Auth] Auth panel hidden - user logged in");
     } else {
       console.error("[Auth] Cannot find auth panel element!");
     }
+    
+    if (gameContainer) {
+      gameContainer.classList.add('active');
+      console.log("[Auth] Game container visible");
+    } else {
+      console.error("[Auth] Cannot find game container!");
+    }
+    
     if (chat.root) chat.root.style.display = "";
   } else {
-    // Not logged in - show auth, hide chat
+    // Not logged in - show auth, hide game
     clearRealtime();
-    document.getElementById("auth").style.display = "";
+    
+    const authPanel = document.getElementById("auth");
+    const gameContainer = document.getElementById("game-container");
+    
+    if (authPanel) authPanel.classList.remove('hidden');
+    if (gameContainer) gameContainer.classList.remove('active');
+    
     if (chat.root) chat.root.style.display = "none";
     if (chat.messages) chat.messages.innerHTML = "";
   }
