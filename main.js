@@ -2349,14 +2349,42 @@ function applyEditLocal(world_id, x,y,z, code){
 }
 
 async function placeBlockServer(world_id, x,y,z, code){
-  // Writes to world_blocks (authoritative) + logs block_updates
-  await supabase.from("world_blocks").upsert({ world_id, x, y, z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: userId(), x,y,z, action:"place", block_type: code });
+  // Use world_blocks table (UUID world_id, integer material_id)
+  const material = MATERIAL_DEFS.find(m => m.code === code);
+  const material_id = material?.id || null;
+  
+  if (!material_id) {
+    console.warn(`[Block] Unknown material code: ${code}`);
+    return;
+  }
+  
+  console.log(`[Block] Placing ${code} at (${x},${y},${z}) material_id: ${material_id}`);
+  
+  const { error } = await supabase.from("world_blocks").upsert({ 
+    world_id, 
+    x, y, z, 
+    material_id 
+  }, { onConflict: "world_id,x,y,z" });
+  
+  if (error) {
+    console.error("[Block] Place failed:", error);
+  }
 }
 
 async function breakBlockServer(world_id, x,y,z){
-  await supabase.from("world_blocks").upsert({ world_id, x,y,z, material_id: null }, { onConflict: "world_id,x,y,z" });
-  await supabase.from("block_updates").insert({ world_id, user_id: userId(), x,y,z, action:"break", block_type: "air" });
+  console.log(`[Block] Breaking block at (${x},${y},${z})`);
+  
+  // Delete from world_blocks (sets to air/null)
+  const { error } = await supabase.from("world_blocks")
+    .delete()
+    .eq("world_id", world_id)
+    .eq("x", x)
+    .eq("y", y)
+    .eq("z", z);
+  
+  if (error) {
+    console.error("[Block] Break failed:", error);
+  }
 }
 
 // We'll store user id from session
@@ -2739,18 +2767,36 @@ async function handleCommand(raw){
 }
 
 async function sendChat(message){
-  if (!worldId || !userId()) return;
+  if (!worldId || !userId()) {
+    console.warn("[Chat] Cannot send - worldId or userId missing");
+    return;
+  }
   const msg = (message||"").trim();
   if (msg.startsWith('/')) return await handleCommand(msg);
-  if (isMutedNow()){ setHint('You are muted.'); return; }
+  if (isMutedNow()){ 
+    setHint('You are muted.'); 
+    console.warn("[Chat] User is muted");
+    return; 
+  }
   if (!msg) return;
-  // Guests can chat (allowed)
-  const { error } = await supabase.from("chat_messages").insert({
+  
+  console.log("[Chat] Sending message:", msg);
+  
+  // Insert message
+  const { data, error } = await supabase.from("chat_messages").insert({
     world_id: worldId,
     user_id: userId(),
     message: msg
-  });
-  if (error) console.warn("chat send:", error.message);
+  }).select().single();
+  
+  if (error) {
+    console.error("[Chat] Send failed:", error);
+    console.error("[Chat] Error code:", error.code);
+    console.error("[Chat] Error message:", error.message);
+    setHint('Chat failed: ' + error.message);
+  } else {
+    console.log("[Chat] Message sent successfully:", data);
+  }
 }
 
 if (chat.form){
@@ -2760,6 +2806,29 @@ if (chat.form){
     chat.input.value = "";
     await sendChat(msg);
   });
+  
+  // Mobile fix: ensure input can receive focus
+  if (chat.input) {
+    // Prevent pointer lock from interfering with chat input
+    chat.input.addEventListener("focus", () => {
+      console.log("[Chat] Input focused");
+      // Exit pointer lock when focusing chat
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+    });
+    
+    chat.input.addEventListener("blur", () => {
+      console.log("[Chat] Input blurred");
+    });
+    
+    // Mobile: tap on chat input should focus it
+    chat.input.addEventListener("touchstart", (e) => {
+      e.stopPropagation(); // Prevent touch handlers from interfering
+      console.log("[Chat] Touch on input");
+      chat.input.focus();
+    }, { passive: true });
+  }
 }
 
 function subscribeRealtime(){
@@ -2784,17 +2853,30 @@ function subscribeRealtime(){
       console.log(`[Realtime] Player state channel: ${status}`);
     });
 
-  // Block updates (authoritative for edits here)
+  // Block updates (listen to world_blocks table)
   const ch2 = supabase.channel(`kidcraft_blocks_${worldId}`)
     .on("postgres_changes",
-      { event: "INSERT", schema: "public", table: "block_updates", filter: `world_id=eq.${worldId}` },
+      { event: "*", schema: "public", table: "world_blocks", filter: `world_id=eq.${worldId}` },
       (payload)=>{
-        const row = payload.new;
+        console.log("[Realtime] Block update:", payload.eventType, payload);
+        const row = payload.new || payload.old;
         if (!row || row.world_id !== worldId) return;
-        const code = row.action === "break" ? "air" : (row.block_type || "stone");
+        
+        // Convert material_id to code
+        let code = "air";
+        if (payload.eventType === "DELETE" || !row.material_id) {
+          code = "air";
+        } else {
+          const material = MATERIAL_DEFS.find(m => m.id === row.material_id);
+          code = material?.code || "stone";
+        }
+        
+        console.log(`[Realtime] Applying block: ${code} at (${row.x},${row.y},${row.z})`);
         applyEditLocal(worldId, row.x, row.y, row.z, code);
       })
-    .subscribe();
+    .subscribe((status) => {
+      console.log(`[Realtime] Blocks channel: ${status}`);
+    });
 
 
   // Chat messages
@@ -2802,12 +2884,19 @@ function subscribeRealtime(){
     .on("postgres_changes",
       { event: "INSERT", schema: "public", table: "chat_messages", filter: `world_id=eq.${worldId}` },
       async (payload)=>{
+        console.log("[Chat] Realtime message received:", payload);
         const row = payload.new;
-        if (!row) return;
+        if (!row) {
+          console.warn("[Chat] No data in payload");
+          return;
+        }
         const name = await getUsernameForUserId(row.user_id) || "player";
+        console.log("[Chat] Adding line from:", name, "message:", row.message);
         addChatLine(name, row.message, row.created_at);
       })
-    .subscribe();
+    .subscribe((status) => {
+      console.log(`[Realtime] Chat channel: ${status}`);
+    });
 
 
   // Mobs

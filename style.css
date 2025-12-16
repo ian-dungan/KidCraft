@@ -2,45 +2,110 @@ html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #000;
+  background: #87CEEB; /* Sky blue background for login */
   font-family: system-ui, sans-serif;
 }
 
 canvas { display:block; }
 
+/* Game container - initially hidden */
+#game-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: none; /* Hidden until logged in */
+  background: #000;
+}
+
+#game-container.active {
+  display: block;
+}
+
+/* Auth panel - full screen centered login */
 #auth {
   position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   z-index: 10000;
-  background: rgba(0,0,0,0.6);
-  padding: 10px;
-  border-radius: 10px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
+  gap: 12px;
   color: #fff;
 }
 
-#auth input, #auth button {
-  padding: 8px;
-  font-size: 14px;
+#auth.hidden {
+  display: none;
+}
+
+#auth::before {
+  content: 'KidCraft';
+  font-size: 48px;
+  font-weight: bold;
+  margin-bottom: 20px;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+#auth input, #auth button, #auth select {
+  padding: 12px 20px;
+  font-size: 16px;
   border-radius: 8px;
   border: 0;
+  min-width: 280px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+#auth input {
+  background: rgba(255,255,255,0.95);
 }
 
 #auth button {
-  background: rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.25);
   color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-#auth button:hover { background: rgba(255,255,255,0.22); cursor:pointer; }
+#auth button:hover { 
+  background: rgba(255,255,255,0.35); 
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
 
-#status { margin: 0; font-size: 12px; opacity: 0.9; flex-basis: 100%; }
+#auth .row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 280px;
+}
 
-.toggle { display:flex; align-items:center; gap:6px; font-size:12px; user-select:none; opacity:0.95; }
+#auth .row label {
+  font-weight: 600;
+}
+
+#status { 
+  margin: 10px 0 0 0; 
+  font-size: 14px; 
+  opacity: 0.95; 
+  text-align: center;
+  max-width: 320px;
+}
+
+.toggle { 
+  display:flex; 
+  align-items:center; 
+  gap:8px; 
+  font-size:14px; 
+  user-select:none; 
+  opacity:0.95; 
+}
 
 #hud{
   position: fixed;
@@ -547,3 +612,7 @@ canvas { display:block; }
 .fslot input{ width:100%; margin: 4px 0; padding: 6px 8px; border-radius: 8px; border:1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.35); color:#eee; }
 .furnace-actions{ display:flex; gap: 10px; justify-content:flex-end; margin-top: 12px; }
 .furnace-actions button{ padding: 8px 10px; border-radius: 10px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.08); color:#eee; cursor:pointer; }
+
+/* Fix chat messages visibility */
+#chat-messages { min-height: 100px !important; }
+
