@@ -1440,6 +1440,7 @@ const tempVec = new THREE.Vector3();
 // VOXEL WORLD (simple procedural + server edits)
 // =======================
 const CHUNK = 16;
+const CHUNK_SIZE = CHUNK; // Alias for compatibility
 const VIEW_CHUNKS = 3; // radius in chunks for streaming
 const BLOCK_SIZE = 1;
 
@@ -2703,9 +2704,11 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
 
-    // Hide auth panel after login
+    // Hide auth panel after login, show chat
     document.getElementById("auth").style.display = "none";
     if (chat.root) chat.root.style.display = "";
+  } else {
+    // Not logged in - show auth, hide chat
     clearRealtime();
     document.getElementById("auth").style.display = "";
     if (chat.root) chat.root.style.display = "none";
