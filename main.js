@@ -73,9 +73,14 @@ function invAdd(code, delta){
 
 async function supaUpsertInventory(code){
   if (!window.supabase || !sessionUserId) return;
-  const qty = invQty(code);
-  await window.supabase.from("kidcraft_player_inventory")
-    .upsert({ user_id: sessionUserId, code, qty, updated_at: new Date().toISOString() }, { onConflict: "user_id,code" });
+  try {
+    const qty = invQty(code);
+    const { error } = await window.supabase.from("kidcraft_player_inventory")
+      .upsert({ user_id: sessionUserId, code, qty, updated_at: new Date().toISOString() }, { onConflict: "user_id,code" });
+    if (error) console.warn("[Inv] upsert failed:", error);
+  } catch (err) {
+    console.warn("[Inv] upsert error:", err);
+  }
 }
 async function supaLoadInventory(){
   if (!window.supabase || !sessionUserId) return;
@@ -92,15 +97,20 @@ function chunkCoord(v, size){ return Math.floor(v / size); }
 
 async function supaUpsertWorldEdit(x,y,z,code){
   if (!window.supabase) return;
-  const chunk_x = chunkCoord(x, CHUNK_SIZE);
-  const chunk_z = chunkCoord(z, CHUNK_SIZE);
-  const payload = {
-    world: WORLD_ID, x, y, z, chunk_x, chunk_z, code,
-    user_id: sessionUserId,
-    updated_at: new Date().toISOString()
-  };
-  await window.supabase.from("kidcraft_world_block_edits")
-    .upsert(payload, { onConflict: "world,x,y,z" });
+  try {
+    const chunk_x = chunkCoord(x, CHUNK_SIZE);
+    const chunk_z = chunkCoord(z, CHUNK_SIZE);
+    const payload = {
+      world: WORLD_ID, x, y, z, chunk_x, chunk_z, code,
+      user_id: sessionUserId,
+      updated_at: new Date().toISOString()
+    };
+    const { error } = await window.supabase.from("kidcraft_world_block_edits")
+      .upsert(payload, { onConflict: "world,x,y,z" });
+    if (error) console.warn("[WorldEdit] upsert failed:", error);
+  } catch (err) {
+    console.warn("[WorldEdit] upsert error:", err);
+  }
 }
 
 async function supaLoadWorldEditsForChunk(cx, cz){
@@ -3306,13 +3316,24 @@ async function takeFurnaceOutput(){
   renderHotbar();
 }
 
+let furnaceTickTimer = null;
+
 function initFurnaceUI(){
-  const close = ()=>{ openFurnacePos=null; showModal("furnaceModal", false); };
+  const close = ()=>{ 
+    openFurnacePos=null; 
+    showModal("furnaceModal", false); 
+  };
   qs("furnaceCloseBtn")?.addEventListener("click", close);
   qs("furnaceStartBtn")?.addEventListener("click", startFurnaceFromUI);
   qs("furnaceTakeBtn")?.addEventListener("click", takeFurnaceOutput);
-  // tick while open
-  setInterval(()=>{ if (openFurnacePos) tickFurnaceIfReady(); }, 800);
+  
+  // tick while open - only create one timer
+  if (furnaceTickTimer) clearInterval(furnaceTickTimer);
+  furnaceTickTimer = setInterval(()=>{ 
+    if (openFurnacePos) {
+      tickFurnaceIfReady().catch(err => console.warn("[Furnace] tick error:", err));
+    }
+  }, 800);
 }
 
 // Initialize furnace UI
