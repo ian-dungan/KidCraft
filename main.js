@@ -2677,19 +2677,41 @@ function subscribeRealtime(){
 // =======================
 // OFFLINE CACHING (simple localStorage)
 // =======================
-function cacheKey(world_id){ return `kidcraft_edits_${world_id}`; }
+const CACHE_VERSION = 2; // Increment to invalidate old caches after bug fixes
+
+function cacheKey(world_id){ return `kidcraft_edits_v${CACHE_VERSION}_${world_id}`; }
 
 function loadCachedEdits(world_id){
+  // Clear old version caches
+  for (let i = 0; i < CACHE_VERSION; i++) {
+    const oldKey = `kidcraft_edits_v${i}_${world_id}`;
+    if (localStorage.getItem(oldKey)) {
+      console.log(`[Cache] Clearing old cache version ${i}`);
+      localStorage.removeItem(oldKey);
+    }
+  }
+  
   const raw = localStorage.getItem(cacheKey(world_id));
   if (!raw) return;
-  const obj = JSON.parse(raw);
-  for (const k in obj){
-    const { x,y,z, code } = obj[k];
-    const [cx, cz] = worldToChunk(x,z);
-    const ck = chunkKey(cx, cz);
-    const map = worldEdits.get(ck) || new Map();
-    worldEdits.set(ck, map);
-    map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
+  
+  try {
+    const obj = JSON.parse(raw);
+    for (const k in obj){
+      const { x,y,z, code } = obj[k];
+      if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+        console.warn(`[Cache] Invalid cached block:`, k);
+        continue;
+      }
+      const [cx, cz] = worldToChunk(x,z);
+      const ck = chunkKey(cx, cz);
+      const map = worldEdits.get(ck) || new Map();
+      worldEdits.set(ck, map);
+      map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
+    }
+    console.log(`[Cache] Loaded ${Object.keys(obj).length} cached edits`);
+  } catch (err) {
+    console.warn("[Cache] Failed to load cache:", err);
+    localStorage.removeItem(cacheKey(world_id));
   }
 }
 
@@ -2706,6 +2728,31 @@ function cacheEdit(world_id, x,y,z, code){
   }
   localStorage.setItem(key, JSON.stringify(obj));
 }
+
+// Global helper for debugging/resetting world
+window.resetWorld = function() {
+  console.log("[Reset] Clearing all world data...");
+  
+  // Clear all localStorage
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.includes('kidcraft')) {
+      localStorage.removeItem(key);
+    }
+  }
+  
+  // Clear in-memory world edits
+  worldEdits.clear();
+  
+  // Clear chunk meshes
+  for (const [k, group] of chunkMeshes.entries()) {
+    scene.remove(group);
+  }
+  chunkMeshes.clear();
+  
+  console.log("[Reset] World reset complete. Refresh the page to start fresh.");
+  alert("World data cleared! Refresh the page (F5) to start with a clean world.");
+};
 
 // =======================
 // LOGIN FLOW BOOTSTRAP
@@ -2727,12 +2774,22 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     // If underwater, pop above sea level
     sy = Math.max(sy, SEA_LEVEL + 3);
     controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    
     setStatus("Loading...");
     loadCachedEdits(worldId);
+    
+    // Force initial chunk generation around spawn
+    const [spawnCx, spawnCz] = worldToChunk(SPAWN_X, SPAWN_Z);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        buildChunk(spawnCx + dx, spawnCz + dz);
+      }
+    }
+    
     subscribeRealtime(); // Now worldId is set, multiplayer will work
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
-      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
+      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
 
     // Hide auth panel after login, show chat
     document.getElementById("auth").style.display = "none";
