@@ -2810,7 +2810,19 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
     setStatus("Auth OK. Creating profile...");
-    await refreshSelfProfile();
+    try {
+      // Create profile if doesn't exist
+      selfUsername = await ensurePlayerProfile(sess);
+      console.log("[Profile] Username:", selfUsername);
+      
+      // Then refresh to get role and mute status
+      await refreshSelfProfile();
+    } catch (err) {
+      console.error("[Profile] Failed to create profile:", err);
+      setStatus("Profile creation failed: " + err.message);
+      return;
+    }
+    
     startMobTickerIfAllowed();
     
     setStatus("Joining world...");
