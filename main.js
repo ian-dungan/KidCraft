@@ -1638,10 +1638,14 @@ function terrainHeight(x,z){
   h += mountains;
 
   // Lakes: shallow basins
-  h -= lakeMask(x,z) * 1.5;  // Reduced from 3.0 → very gentle
+  h -= lakeMask(x,z) * 1.5;
 
   // Rivers: carve long channels
-  h -= riverMask(x,z) * 3.0;  // Reduced from 6.0 → much shallower
+  h -= riverMask(x,z) * 3.0;
+  
+  // CRITICAL: Add constant offset to ensure terrain stays above sea level
+  // Without this, most terrain generates underwater causing "island" effect
+  h += 10;  // Raises entire world to keep most terrain above water (SEA_LEVEL=24)
 
   return clamp(Math.floor(h), 6, 120);
 }
