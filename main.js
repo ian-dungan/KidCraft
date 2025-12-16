@@ -1945,7 +1945,20 @@ function matFor(code){
 
   let mat = null;
 
-  if (key === "Grass_Block"){
+  // Check if material has visual props in database
+  const dbMaterial = MATERIAL_DEFS.find(m => m.code === key);
+  if (dbMaterial && dbMaterial.props && dbMaterial.props.visual) {
+    const visual = dbMaterial.props.visual;
+    const color = parseInt(visual.color) || 0x808080;
+    mat = new THREE.MeshStandardMaterial({ 
+      color: color,
+      transparent: visual.transparent || false,
+      opacity: visual.opacity || 1.0,
+      side: visual.transparent ? THREE.DoubleSide : THREE.FrontSide
+    });
+  }
+  // Hardcoded textured materials (override database)
+  else if (key === "Grass_Block"){
     mat = grassMaterialArray();
   } else if (key === "dirt"){
     mat = texturedMat(tex_dirt());
@@ -1953,11 +1966,21 @@ function matFor(code){
     mat = texturedMat(tex_stone());
   } else if (key === "sand"){
     mat = texturedMat(tex_sand());
+  } else if (key === "water"){
+    // Fallback if not in database
+    mat = new THREE.MeshStandardMaterial({ 
+      color: 0x3b82f6, 
+      transparent: true, 
+      opacity: 0.6,
+      side: THREE.DoubleSide 
+    });
+  } else if (key === "snow"){
+    // Fallback if not in database
+    mat = new THREE.MeshStandardMaterial({ color: 0xffffff });
   } else if ((key||"").toLowerCase().includes("ore")){
     mat = oreMaterial(key);
   } else {
-    // Fallback: keep existing color system so DB materials still render
-    // If you have a color map already, it will still be used by the rest of the code.
+    // Final fallback: generate color from hash
     mat = new THREE.MeshStandardMaterial({ color: colorFor(key) });
   }
 
@@ -2225,8 +2248,9 @@ function buildChunk(cx, cz){
       const wx = baseX + x;
       const wz = baseZ + z;
       const h = terrainHeight(wx, wz);
-      // render down to MIN_Y, but cull interior blocks
-      for (let y=MIN_Y; y<=h; y++){
+      // render down to MIN_Y, and UP TO sea level (to show water)
+      const maxY = Math.max(h, SEA_LEVEL);
+      for (let y=MIN_Y; y<=maxY; y++){
         const code = getBlockCode(wx,y,wz);
         if (code === "air") continue;
 
