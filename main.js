@@ -276,12 +276,29 @@ async function ensurePlayerProfile(session){
     
     console.log("[Profile] Creating profile for user:", user_id);
     console.log("[Profile] Username:", username);
+    console.log("[Profile] Starting upsert...");
 
-    let { data, error } = await supabase
+    // Wrap with timeout
+    const upsertPromise = supabase
         .from("player_profiles")
         .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" })
         .select()
         .single();
+    
+    const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Profile upsert timeout after 10 seconds")), 10000)
+    );
+
+    let data, error;
+    try {
+        const result = await Promise.race([upsertPromise, timeoutPromise]);
+        data = result.data;
+        error = result.error;
+        console.log("[Profile] Upsert completed");
+    } catch (timeoutError) {
+        console.error("[Profile] TIMEOUT:", timeoutError.message);
+        throw timeoutError;
+    }
 
     if (error) {
         console.error("[Profile] UPSERT failed:", error);
@@ -294,11 +311,18 @@ async function ensurePlayerProfile(session){
             console.log("[Profile] Username conflict, trying with suffix...");
             username = `${username}_${Math.random().toString(36).slice(2,6)}`;
             savePreferredUsername(username);
-            const res2 = await supabase
+            
+            const res2Promise = supabase
                 .from("player_profiles")
                 .upsert({ user_id, username, settings: {} }, { onConflict: "user_id" })
                 .select()
                 .single();
+            
+            const timeout2 = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Retry timeout")), 10000)
+            );
+            
+            const res2 = await Promise.race([res2Promise, timeout2]);
             if (res2.error) {
                 console.error("[Profile] Retry failed:", res2.error);
                 throw res2.error;
