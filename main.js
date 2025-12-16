@@ -2414,15 +2414,28 @@ function inSpawnProtection(x, z){
 let lastStatePush = 0;
 
 async function ensureWorld(){
-  const slug = getSelectedWorldSlug();
-  const { data, error } = await supabase
-    .from("worlds")
-    .select("id,slug")
-    .eq("slug", slug)
-    .maybeSingle();
-  if (error) { console.warn(error); return null; }
-  worldId = data?.id || null;
-  return worldId;
+  try {
+    const slug = getSelectedWorldSlug();
+    const { data, error } = await supabase
+      .from("worlds")
+      .select("id,slug")
+      .eq("slug", slug)
+      .maybeSingle();
+    if (error) { 
+      console.warn("[World] Failed to fetch world:", error); 
+      return null; 
+    }
+    worldId = data?.id || null;
+    if (worldId) {
+      console.log(`[World] Joined world: ${slug} (id: ${worldId})`);
+    } else {
+      console.warn(`[World] World not found: ${slug}`);
+    }
+    return worldId;
+  } catch (err) {
+    console.error("[World] ensureWorld error:", err);
+    return null;
+  }
 }
 
 async function pushPlayerState(){
@@ -2441,13 +2454,19 @@ async function pushPlayerState(){
   const turned = Math.abs(r-ls.r) > 0.01;
   if (!moved && !turned) return;
   ls.x=p.x; ls.y=p.y; ls.z=p.z; ls.r=r;
-  await supabase.from("player_state").upsert({
-    user_id: userId(),
-    world_id: worldId,
-    pos_x: p.x, pos_y: p.y, pos_z: p.z,
-    rot_y: controls.object.rotation.y,
-    updated_at: new Date().toISOString()
-  });
+  
+  try {
+    const { error } = await supabase.from("player_state").upsert({
+      user_id: userId(),
+      world_id: worldId,
+      pos_x: p.x, pos_y: p.y, pos_z: p.z,
+      rot_y: controls.object.rotation.y,
+      updated_at: new Date().toISOString()
+    });
+    if (error) console.warn("[PlayerState] Update failed:", error);
+  } catch (err) {
+    console.warn("[PlayerState] Update error:", err);
+  }
 }
 
 async function pullNearbyWorldBlocks(){
@@ -2589,7 +2608,12 @@ if (chat.form){
 }
 
 function subscribeRealtime(){
-  if (!worldId) return;
+  if (!worldId) {
+    console.warn("[Realtime] Cannot subscribe - worldId is null");
+    return;
+  }
+  
+  console.log(`[Realtime] Subscribing to channels for world: ${worldId}`);
 
   // Player state updates
   const ch1 = supabase.channel(`kidcraft_state_${worldId}`)
@@ -2598,9 +2622,12 @@ function subscribeRealtime(){
       (payload)=>{
         const row = payload.new || payload.old;
         if (!row) return;
+        console.log("[Realtime] Player update:", row.user_id);
         upsertOtherPlayer(row.user_id, row.pos_x, row.pos_y, row.pos_z, row.rot_y);
       })
-    .subscribe();
+    .subscribe((status) => {
+      console.log(`[Realtime] Player state channel: ${status}`);
+    });
 
   // Block updates (authoritative for edits here)
   const ch2 = supabase.channel(`kidcraft_blocks_${worldId}`)
@@ -2689,9 +2716,12 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
     setStatus("Auth OK. Creating profile...");
-    { // FIX: removed dangling try selfUsername = await ensurePlayerProfile(sess);
-      await refreshSelfProfile();
-      startMobTickerIfAllowed(); }
+    await refreshSelfProfile();
+    startMobTickerIfAllowed();
+    
+    setStatus("Joining world...");
+    await ensureWorld(); // CRITICAL: Get worldId for multiplayer
+    
     setStatus("World joined. Spawning...");
     let sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
     // If underwater, pop above sea level
@@ -2699,7 +2729,7 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
     setStatus("Loading...");
     loadCachedEdits(worldId);
-    subscribeRealtime();
+    subscribeRealtime(); // Now worldId is set, multiplayer will work
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place"));
