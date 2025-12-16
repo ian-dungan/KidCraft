@@ -350,6 +350,25 @@ const ui = {
   hint: document.getElementById("hint"),
 };
 
+// Prevent Enter key from causing page refresh
+if (ui.username) {
+  ui.username.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      ui.password?.focus();
+    }
+  });
+}
+
+if (ui.password) {
+  ui.password.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      ui.login?.click();
+    }
+  });
+}
+
 ui.guest.style.display = ENABLE_GUEST_BUTTON ? "" : "none";
 
 function setStatus(msg){ ui.status.textContent = msg; }
