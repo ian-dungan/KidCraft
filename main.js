@@ -3433,6 +3433,38 @@ function animate(){
   pushPlayerState();
 
   controls.object.rotation.z = 0;
+  
+  // Chunk loading: Build chunks around player as they move
+  if (controls && controls.object) {
+    const px = controls.object.position.x;
+    const pz = controls.object.position.z;
+    const [playerCx, playerCz] = worldToChunk(Math.floor(px), Math.floor(pz));
+    
+    // Build chunks in radius around player
+    const loadRadius = 4; // Load 4 chunks in each direction
+    for (let dx = -loadRadius; dx <= loadRadius; dx++) {
+      for (let dz = -loadRadius; dz <= loadRadius; dz++) {
+        const cx = playerCx + dx;
+        const cz = playerCz + dz;
+        buildChunk(cx, cz);
+      }
+    }
+    
+    // Unload far chunks (optional - saves memory)
+    const unloadRadius = 6;
+    for (const [k, group] of chunkMeshes.entries()) {
+      const [cx, cz] = k.split(',').map(Number);
+      const dist = Math.max(Math.abs(cx - playerCx), Math.abs(cz - playerCz));
+      if (dist > unloadRadius) {
+        scene.remove(group);
+        group.traverse(o => {
+          if (o.isMesh) o.geometry.dispose?.();
+        });
+        chunkMeshes.delete(k);
+      }
+    }
+  }
+
   renderer.render(scene, camera);
 }
 animate();
