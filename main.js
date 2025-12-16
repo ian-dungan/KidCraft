@@ -374,9 +374,10 @@ ui.guest.onclick = async () => {
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
 
-  {const sess = await supabase.auth.getSession();
-    const uid = sess?.data?.session?.user?.id;
-    if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
+  const sess = await supabase.auth.getSession();
+  const uid = sess?.data?.session?.user?.id;
+  if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
+};
 
 // =======================
 // WORLD DATA STRUCTURES
@@ -548,28 +549,27 @@ function pickCommonHotbar(materials){
 }
 
 async function loadMaterialsFromDB(){
-  {
-    const { data, error } = await supabase
-      .from("materials")
-      .select("code, display_name, category, tags, hardness, props")
-      .eq("category","block")
-      .limit(5000);
-    if (error) { console.warn("[Materials] load failed:", error.message); return; }
-    MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
-    ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
-    COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
-    // If we found a decent set, replace BLOCKS used by hotbar/material palette.
-    if (COMMON_BLOCKS.length >= 5){
-      BLOCKS.length = 0;
-      for (const b of COMMON_BLOCKS) BLOCKS.push(b);
-      HOTBAR_ITEMS = [];
-      invLoad();
-  ensureStarterKit();
-  renderHotbar();
-    }
-    MATERIALS_READY = true;
-    console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
-  }}
+  const { data, error } = await supabase
+    .from("materials")
+    .select("code, display_name, category, tags, hardness, props")
+    .eq("category","block")
+    .limit(5000);
+  if (error) { console.warn("[Materials] load failed:", error.message); return; }
+  MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
+  ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
+  COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
+  // If we found a decent set, replace BLOCKS used by hotbar/material palette.
+  if (COMMON_BLOCKS.length >= 5){
+    BLOCKS.length = 0;
+    for (const b of COMMON_BLOCKS) BLOCKS.push(b);
+    HOTBAR_ITEMS = [];
+    invLoad();
+    ensureStarterKit();
+    renderHotbar();
+  }
+  MATERIALS_READY = true;
+  console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
+}
 
 
 
@@ -863,6 +863,8 @@ async function pickupDrop(idx){
   invAdd(d.code, d.qty);
   // persist
   if (typeof supaUpsertInventory === "function") {
+    await supaUpsertInventory(d.code);
+  }
   // remove mesh
   scene.remove(d.mesh);
   drops.splice(idx,1);
@@ -948,12 +950,11 @@ let audioUnlocked = false;
 
 function unlockAudio(){
   if (audioUnlocked) return;
-  {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    // iOS/Chrome: resume on user gesture
-    audioCtx.resume?.();
-    audioUnlocked = true;
-  }}
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  // iOS/Chrome: resume on user gesture
+  audioCtx.resume?.();
+  audioUnlocked = true;
+}
 window.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
 window.addEventListener("touchstart", unlockAudio, { once: true, passive: true });
 
@@ -1031,12 +1032,12 @@ function invStorageKey(){
   return "kidcraft_inv_" + u;
 }
 function invLoad(){
-  {
-    const raw = localStorage.getItem(invStorageKey());
-    INV_LEGACY = raw ? JSON.parse(raw) : {};
-  }}
+  const raw = localStorage.getItem(invStorageKey());
+  INV_LEGACY = raw ? JSON.parse(raw) : {};
+}
 function invSave(){
-  { localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY)); }}
+  localStorage.setItem(invStorageKey(), JSON.stringify(INV_LEGACY));
+}
 function invCount(code){ return (INV_LEGACY && INV_LEGACY[code]) ? INV_LEGACY[code] : 0; }
 // [DEDUP] renamed duplicate declaration of 'invAdd' at line 966 -> 'invAdd_DUP2'
 function invAdd_DUP2(code, n=1){
@@ -2634,34 +2635,32 @@ function subscribeRealtime(){
 function cacheKey(world_id){ return `kidcraft_edits_${world_id}`; }
 
 function loadCachedEdits(world_id){
-  {
-    const raw = localStorage.getItem(cacheKey(world_id));
-    if (!raw) return;
-    const obj = JSON.parse(raw);
-    for (const k in obj){
-      const { x,y,z, code } = obj[k];
-      const [cx, cz] = worldToChunk(x,z);
-      const ck = chunkKey(cx, cz);
-      const map = worldEdits.get(ck) || new Map();
-      worldEdits.set(ck, map);
-      map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
-    }
-  }}
+  const raw = localStorage.getItem(cacheKey(world_id));
+  if (!raw) return;
+  const obj = JSON.parse(raw);
+  for (const k in obj){
+    const { x,y,z, code } = obj[k];
+    const [cx, cz] = worldToChunk(x,z);
+    const ck = chunkKey(cx, cz);
+    const map = worldEdits.get(ck) || new Map();
+    worldEdits.set(ck, map);
+    map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
+  }
+}
 
 function cacheEdit(world_id, x,y,z, code){
-  {
-    const key = cacheKey(world_id);
-    const raw = localStorage.getItem(key);
-    const obj = raw ? JSON.parse(raw) : {};
-    obj[blockKey(x,y,z)] = { x,y,z, code };
-    // keep from exploding: cap entries
-    const keys = Object.keys(obj);
-    if (keys.length > 5000){
-      // drop oldest-ish by deleting first 500
-      for (let i=0;i<500;i++) delete obj[keys[i]];
-    }
-    localStorage.setItem(key, JSON.stringify(obj));
-  }}
+  const key = cacheKey(world_id);
+  const raw = localStorage.getItem(key);
+  const obj = raw ? JSON.parse(raw) : {};
+  obj[blockKey(x,y,z)] = { x,y,z, code };
+  // keep from exploding: cap entries
+  const keys = Object.keys(obj);
+  if (keys.length > 5000){
+    // drop oldest-ish by deleting first 500
+    for (let i=0;i<500;i++) delete obj[keys[i]];
+  }
+  localStorage.setItem(key, JSON.stringify(obj));
+}
 
 // =======================
 // LOGIN FLOW BOOTSTRAP
@@ -3309,3 +3308,6 @@ function initFurnaceUI(){
   // tick while open
   setInterval(()=>{ if (openFurnacePos) tickFurnaceIfReady(); }, 800);
 }
+
+// Initialize furnace UI
+initFurnaceUI();
