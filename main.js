@@ -1773,7 +1773,8 @@ function getBlockCode(x,y,z){
   }
   // Caves: carve underground air pockets/tubes
   if (isCaveAir(x,y,z,h)) return "air";
-  return "stone";
+  // Underground: stone with ores mixed in
+  return getStoneFill(x,y,z);
 }
 
 const geom = new THREE.BoxGeometry(1,1,1);
@@ -3137,6 +3138,15 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     loadCachedEdits(worldId);
     
     subscribeRealtime(); // Now worldId is set, multiplayer will work
+    
+    // Load mobs and start AI ticker
+    loadMobs().then(() => {
+      console.log("[Mobs] Loaded and spawned");
+      startMobTickerIfAllowed();
+    }).catch(err => {
+      console.warn("[Mobs] Failed to load:", err.message);
+    });
+    
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
