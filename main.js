@@ -475,7 +475,32 @@ ui.guest.onclick = async () => {
 // =======================
 // WORLD DATA STRUCTURES
 // =======================
-const noise2D = createNoise2D();
+// Initialize with default seed (will be replaced with world seed)
+let noise2D = createNoise2D();
+
+function initializeNoise(seed) {
+  console.log("[Noise] Initializing with seed:", seed);
+  // Create PRNG from seed
+  const alea = (function(seed) {
+    let s0 = 0, s1 = 0, s2 = 0, c = 1;
+    if (seed) {
+      s0 = (seed >>> 0) * 2.3283064365386963e-10;
+      seed = (seed + 1831565813) | 0;
+      s1 = (seed >>> 0) * 2.3283064365386963e-10;
+      seed = (seed + 1831565813) | 0;
+      s2 = (seed >>> 0) * 2.3283064365386963e-10;
+    }
+    return function() {
+      const t = 2091639 * s0 + c * 2.3283064365386963e-10;
+      s0 = s1; s1 = s2;
+      return s2 = t - (c = t | 0);
+    };
+  })(seed);
+  
+  // Create noise with seeded RNG
+  noise2D = createNoise2D(alea);
+  console.log("[Noise] Noise function initialized with seed");
+}
 
 // Simple voxel data: chunk key -> Map("x,y,z" => blockCode)
 const worldEdits = new Map(); // persisted server-side in world_blocks; cached client-side too.
@@ -2525,12 +2550,14 @@ function inSpawnProtection(x, z){
 
 let lastStatePush = 0;
 
+let worldSeed = null;
+
 async function ensureWorld(){
   try {
     const slug = getSelectedWorldSlug();
     const { data, error } = await supabase
       .from("worlds")
-      .select("id,slug")
+      .select("id,slug,seed")  // Also fetch seed!
       .eq("slug", slug)
       .maybeSingle();
     if (error) { 
@@ -2538,8 +2565,24 @@ async function ensureWorld(){
       return null; 
     }
     worldId = data?.id || null;
+    worldSeed = data?.seed || 12345; // Default seed if missing
+    
     if (worldId) {
-      console.log(`[World] Joined world: ${slug} (id: ${worldId})`);
+      console.log(`[World] Joined world: ${slug} (id: ${worldId}, seed: ${worldSeed})`);
+      
+      // Reinitialize noise with world seed
+      initializeNoise(worldSeed);
+      
+      // Clear any existing chunks and rebuild with correct seed
+      for (const [k, group] of chunkMeshes.entries()) {
+        scene.remove(group);
+        group.traverse(o => {
+          if (o.isMesh) o.geometry.dispose?.();
+        });
+      }
+      chunkMeshes.clear();
+      console.log("[World] Chunks cleared for regeneration with correct seed");
+      
     } else {
       console.warn(`[World] World not found: ${slug}`);
     }
