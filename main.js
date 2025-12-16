@@ -375,8 +375,26 @@ ui.login.onclick = async () => {
   if (!p) return setStatus("Enter password.");
   savePreferredUsername(u);
   if (ui.username) ui.username.value = u;
-  const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(u), password: p });
-  setStatus(error ? error.message : "Logged in.");
+  
+  setStatus("Logging in...");
+  const { data, error } = await supabase.auth.signInWithPassword({ 
+    email: usernameToEmail(u), 
+    password: p 
+  });
+  
+  if (error) {
+    console.warn("[Auth] Login error:", error);
+    if (error.message.includes("Invalid login credentials")) {
+      return setStatus("Wrong username or password. Check spelling or create account.");
+    }
+    return setStatus(error.message);
+  }
+  
+  if (data?.session) {
+    setStatus("Logged in successfully!");
+  } else {
+    setStatus("Login failed - no session created.");
+  }
 };
 
 ui.guest.onclick = async () => {
@@ -2821,7 +2839,13 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
 
     // Hide auth panel after login, show chat
-    document.getElementById("auth").style.display = "none";
+    const authPanel = document.getElementById("auth");
+    if (authPanel) {
+      authPanel.style.display = "none";
+      console.log("[Auth] Auth panel hidden - user logged in");
+    } else {
+      console.error("[Auth] Cannot find auth panel element!");
+    }
     if (chat.root) chat.root.style.display = "";
   } else {
     // Not logged in - show auth, hide chat
