@@ -3767,6 +3767,29 @@ window.DEBUG = {
   rebuildChunk,
   applyEditLocal,
   MATERIAL_DEFS,
+  // Test noise function
+  testNoise: () => {
+    console.log("=== NOISE DIAGNOSTIC ===");
+    console.log("Noise (0, 0):", noise2D(0, 0));
+    console.log("Noise (1, 0):", noise2D(1, 0));
+    console.log("Noise (0, 1):", noise2D(0, 1));
+    console.log("Noise (10, 10):", noise2D(10, 10));
+    console.log("Noise (100, 100):", noise2D(100, 100));
+    console.log("Noise (0.002, 0.002):", noise2D(0.002, 0.002));
+    
+    // Test with terrain scale
+    console.log("\n=== TERRAIN SCALE NOISE ===");
+    console.log("At (0,0) x0.002:", noise2D(0*0.002, 0*0.002));
+    console.log("At (10,0) x0.002:", noise2D(10*0.002, 0*0.002));
+    console.log("At (100,0) x0.002:", noise2D(100*0.002, 0*0.002));
+  },
+  // Re-initialize noise with new seed
+  reinitNoise: (seed) => {
+    console.log(`[Debug] Reinitializing noise with seed: ${seed}`);
+    initializeNoise(seed);
+    console.log("[Debug] Noise reinitialized. Testing...");
+    window.DEBUG.testNoise();
+  },
   // Test terrain at a position
   testTerrain: (x, z) => {
     const h = terrainHeight(x, z);
@@ -3796,5 +3819,7 @@ window.DEBUG = {
 };
 
 console.log("[Debug] DEBUG tools available via window.DEBUG");
+console.log("[Debug] Try: DEBUG.testNoise()");
 console.log("[Debug] Try: DEBUG.testTerrain(0, 0)");
+console.log("[Debug] Try: DEBUG.reinitNoise(12345)");
 console.log("[Debug] Try: DEBUG.testArea()");
