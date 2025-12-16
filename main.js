@@ -1384,9 +1384,8 @@ ui.gyro.addEventListener("change", async () => {
   if (!ui.gyro.checked) { gyroEnabled = false; lastAlpha = lastBeta = null; return; }
   // iOS requires user gesture + permission request
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-    { // FIX: removed dangling try
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res !== "granted") { ui.gyro.checked = false; return; }
+    const res = await DeviceOrientationEvent.requestPermission();
+    if (res !== "granted") { ui.gyro.checked = false; return; }
   }
   gyroEnabled = true;
 });
