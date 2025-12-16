@@ -616,3 +616,12 @@ canvas { display:block; }
 /* Fix chat messages visibility */
 #chat-messages { min-height: 100px !important; }
 
+
+/* MOBILE FIX: Chat must be above touch zones */
+#touch-left, #touch-right {
+  z-index: 9000 !important; /* Below chat (9500) */
+}
+#chat {
+  z-index: 9500 !important; /* Above touch zones */
+}
+
