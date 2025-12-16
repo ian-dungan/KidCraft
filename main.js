@@ -2581,8 +2581,8 @@ let realtimeChannels = [];
 /* =======================
    SPAWN PROTECTION
    ======================= */
-const SPAWN_X = 0;
-const SPAWN_Z = 0;
+const SPAWN_X = 100;
+const SPAWN_Z = 100;
 const SPAWN_PROTECT_RADIUS = 10; // blocks
 const SPAWN_PROTECT_SECONDS = 20; // seconds after login
 let spawnProtectUntil = 0;
@@ -3071,22 +3071,42 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     setStatus("Joining world...");
     await ensureWorld(); // CRITICAL: Get worldId for multiplayer
     
-    setStatus("World joined. Spawning...");
-    let sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
-    // If underwater, pop above sea level
-    sy = Math.max(sy, SEA_LEVEL + 3);
-    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    setStatus("World joined. Generating spawn...");
     
-    setStatus("Loading...");
-    loadCachedEdits(worldId);
-    
-    // Force initial chunk generation around spawn
+    // Force initial chunk generation around spawn FIRST
     const [spawnCx, spawnCz] = worldToChunk(SPAWN_X, SPAWN_Z);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         buildChunk(spawnCx + dx, spawnCz + dz);
       }
     }
+    
+    console.log(`[Spawn] Chunks built, looking for ground at (${SPAWN_X}, ${SPAWN_Z})`);
+    
+    // NOW find solid ground by scanning down
+    let sy = 80; // Start high
+    let foundGround = false;
+    
+    for (let y = 80; y >= MIN_Y; y--) {
+      const code = getBlockCode(SPAWN_X, y, SPAWN_Z);
+      if (code && code !== "air" && code !== "water") {
+        sy = y + 2; // Spawn 2 blocks above solid ground
+        foundGround = true;
+        console.log(`[Spawn] Found ground: ${code} at Y=${y}, spawning at Y=${sy}`);
+        break;
+      }
+    }
+    
+    // Fallback if no ground found
+    if (!foundGround) {
+      console.warn("[Spawn] No ground found after scanning, using default Y=35");
+      sy = 35;
+    }
+    
+    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    
+    setStatus("Loading...");
+    loadCachedEdits(worldId);
     
     subscribeRealtime(); // Now worldId is set, multiplayer will work
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
@@ -3761,12 +3781,32 @@ window.DEBUG = {
   camera,
   SEA_LEVEL,
   CHUNK_SIZE,
+  MIN_Y,
   player: () => player,
   worldEdits: () => worldEdits,
   chunkMeshes: () => chunkMeshes,
   rebuildChunk,
   applyEditLocal,
   MATERIAL_DEFS,
+  // Check player position
+  whereAmI: () => {
+    const pos = camera.position;
+    const x = Math.floor(pos.x);
+    const y = Math.floor(pos.y);
+    const z = Math.floor(pos.z);
+    console.log("=== YOUR POSITION ===");
+    console.log(`X: ${x}, Y: ${y}, Z: ${z}`);
+    console.log(`Block at feet: ${getBlockCode(x, y-2, z)}`);
+    console.log(`Block below: ${getBlockCode(x, y-3, z)}`);
+    console.log(`Terrain height here: ${terrainHeight(x, z)}`);
+    if (y < MIN_Y + 5) {
+      console.warn("⚠️ You're near the bottom of the world!");
+    }
+    if (y > 100) {
+      console.warn("⚠️ You're very high up!");
+    }
+    return { x, y, z };
+  },
   // Test noise function
   testNoise: () => {
     console.log("=== NOISE DIAGNOSTIC ===");
@@ -3819,7 +3859,7 @@ window.DEBUG = {
 };
 
 console.log("[Debug] DEBUG tools available via window.DEBUG");
-console.log("[Debug] Try: DEBUG.testNoise()");
-console.log("[Debug] Try: DEBUG.testTerrain(0, 0)");
-console.log("[Debug] Try: DEBUG.reinitNoise(12345)");
-console.log("[Debug] Try: DEBUG.testArea()");
+console.log("[Debug] Try: DEBUG.whereAmI() - Check your position");
+console.log("[Debug] Try: DEBUG.testNoise() - Test noise function");
+console.log("[Debug] Try: DEBUG.testTerrain(x, z) - Check terrain");
+console.log("[Debug] Try: DEBUG.testArea() - View 5x5 height map");
