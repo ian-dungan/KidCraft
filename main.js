@@ -2730,7 +2730,7 @@ function cacheEdit(world_id, x,y,z, code){
 }
 
 // Global helper for debugging/resetting world
-window.resetWorld = function() {
+window.resetWorld = async function() {
   console.log("[Reset] Clearing all world data...");
   
   // Clear all localStorage
@@ -2752,6 +2752,35 @@ window.resetWorld = function() {
   
   console.log("[Reset] World reset complete. Refresh the page to start fresh.");
   alert("World data cleared! Refresh the page (F5) to start with a clean world.");
+};
+
+// Global helper to clear DATABASE corrupted blocks
+window.clearDatabaseBlocks = async function() {
+  if (!window.supabase) {
+    console.error("[ClearDB] Supabase not available");
+    return;
+  }
+  
+  console.log("[ClearDB] WARNING: This will delete ALL block edits from database!");
+  const confirm1 = prompt("Type 'DELETE ALL' to confirm:");
+  if (confirm1 !== 'DELETE ALL') {
+    console.log("[ClearDB] Cancelled");
+    return;
+  }
+  
+  console.log("[ClearDB] Deleting all world block edits...");
+  const { error } = await window.supabase
+    .from("kidcraft_world_block_edits")
+    .delete()
+    .neq("world", "impossible_value"); // Deletes all rows
+  
+  if (error) {
+    console.error("[ClearDB] Failed to delete:", error);
+    alert("Failed to clear database: " + error.message);
+  } else {
+    console.log("[ClearDB] Database blocks cleared!");
+    alert("Database cleared! Now run: localStorage.clear() then refresh.");
+  }
 };
 
 // =======================
