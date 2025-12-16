@@ -2242,6 +2242,64 @@ function buildChunk(cx, cz){
   const created = new Set(); // track rendered blocks so edits don't double-spawn
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
+  
+  // === STRUCTURE GENERATION (Villages, Houses, Trees) ===
+  // Only generate if this chunk doesn't already have edits (prevents regenerating on chunk rebuild)
+  const hasExistingEdits = map.size > 0;
+  if (!hasExistingEdits) {
+    // Center point of chunk for structure checks
+    const centerX = baseX + Math.floor(CHUNK/2);
+    const centerZ = baseZ + Math.floor(CHUNK/2);
+    const centerBiome = biomeAt(centerX, centerZ);
+    
+    // Structure helper functions
+    const structureBlocks = new Map();
+    const setBlock = (x,y,z,code) => {
+      structureBlocks.set(blockKey(x,y,z), code);
+    };
+    const getH = (x,z) => terrainHeight(x,z);
+    const getBlock = (x,y,z) => {
+      const k = blockKey(x,y,z);
+      if (structureBlocks.has(k)) return structureBlocks.get(k);
+      return getBlockCode(x,y,z);
+    };
+    
+    // Try to place village in this chunk (rare, ~18% of regions)
+    const villageAttempted = tryPlaceVillage(setBlock, getH, getBlock, centerX, centerZ, centerBiome);
+    if (villageAttempted) {
+      console.log(`[Village] Generated at chunk (${cx}, ${cz})`);
+    }
+    
+    // If no village, try individual house (very rare, ~1 per 500 blocks)
+    if (!villageAttempted) {
+      const houseAttempted = tryPlaceHouse(setBlock, getH, centerX, centerZ, centerBiome);
+      if (houseAttempted) {
+        console.log(`[House] Generated at chunk (${cx}, ${cz})`);
+      }
+    }
+    
+    // Try to place trees (if no village/house, or on edges)
+    if ((!villageAttempted && structureBlocks.size < 50) || structureBlocks.size === 0) {
+      for (let x=0;x<CHUNK;x+=4){  // Check every 4 blocks for performance
+        for (let z=0;z<CHUNK;z+=4){
+          const wx = baseX + x;
+          const wz = baseZ + z;
+          const h = terrainHeight(wx, wz);
+          const biome = biomeAt(wx, wz);
+          
+          // Only place trees on grass, above water
+          if (h > SEA_LEVEL && getBlock(wx, h, wz) === "Grass_Block") {
+            tryPlaceTree(setBlock, wx, h, wz, biome);
+          }
+        }
+      }
+    }
+    
+    // Apply structure blocks to chunk edits
+    for (const [k, code] of structureBlocks.entries()) {
+      map.set(k, code);
+    }
+  }
 
   // Base terrain (procedural + edits) - render ONLY exposed blocks (performance)
   for (let x=0;x<CHUNK;x++){
