@@ -1638,10 +1638,10 @@ function terrainHeight(x,z){
   h += mountains;
 
   // Lakes: shallow basins
-  h -= lakeMask(x,z) * 3.0;  // Reduced from 5.5
+  h -= lakeMask(x,z) * 1.5;  // Reduced from 3.0 → very gentle
 
   // Rivers: carve long channels
-  h -= riverMask(x,z) * 6.0;  // Reduced from 10.0
+  h -= riverMask(x,z) * 3.0;  // Reduced from 6.0 → much shallower
 
   return clamp(Math.floor(h), 6, 120);
 }
