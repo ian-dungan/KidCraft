@@ -625,3 +625,14 @@ canvas { display:block; }
   z-index: 9500 !important; /* Above touch zones */
 }
 
+
+/* HOTBAR AT TOP OF SCREEN */
+#hud {
+  top: 0 !important;
+  bottom: auto !important;
+}
+
+#hotbar {
+  margin: 10px auto 0 auto !important;
+}
+
