@@ -202,11 +202,8 @@ let activeSlot = 0;
 // Hotbar renderer (shim)
 // Some legacy paths call renderHotbar(); keep it defined.
 function renderHotbar(){
-  { // FIX: removed dangling try
-    if (typeof renderHotbarModern === "function") return renderHotbarModern();
+  {if (typeof renderHotbarModern === "function") return renderHotbarModern();
     if (typeof renderHotbar_LEGACY === "function") return renderHotbar_LEGACY();
-  } catch (e) {
-    console.warn("[HUD] renderHotbar shim exception", e);
   }
 }
 
@@ -377,12 +374,9 @@ ui.guest.onclick = async () => {
   const { error } = await supabase.auth.signInAnonymously();
   setStatus(error ? error.message : "Guest session started.");
 
-  { // FIX: removed dangling try
-    const sess = await supabase.auth.getSession();
+  {const sess = await supabase.auth.getSession();
     const uid = sess?.data?.session?.user?.id;
     if (uid) savePreferredUsername(`guest_${uid.slice(0,6)}`);
-  } catch {}
-};
 
 // =======================
 // WORLD DATA STRUCTURES
@@ -639,8 +633,6 @@ document.body.addEventListener("click", () => {
   // Guard: only request lock if supported and not already locked.
   if (!document.body.requestPointerLock) return;
   if (document.pointerLockElement) return;
-  { // FIX: removed dangling try controls.lock(); } catch {}
-});
 function isMobile(){
   return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
@@ -805,13 +797,6 @@ const drops = []; // {mesh, code, qty, vel:THREE.Vector3, born:number}
 
 function dropColor(code){
   // simple stable color; use block color when possible
-  { // FIX: removed dangling try return colorFor(code); } catch { }
-  const h = [...String(code)].reduce((a,c)=> (a*31 + c.charCodeAt(0))>>>0, 7);
-  const r = 80 + (h & 127);
-  const g = 80 + ((h>>>7) & 127);
-  const b = 80 + ((h>>>14) & 127);
-  return (r<<16) | (g<<8) | b;
-}
 
 function makeDropMesh(code){
   // small billboarded quad (like an item sprite)
@@ -878,8 +863,6 @@ async function pickupDrop(idx){
   invAdd(d.code, d.qty);
   // persist
   if (typeof supaUpsertInventory === "function") {
-    { // FIX: removed dangling try await supaUpsertInventory(d.code); } catch {}
-  }
   // remove mesh
   scene.remove(d.mesh);
   drops.splice(idx,1);
@@ -1404,10 +1387,6 @@ ui.gyro.addEventListener("change", async () => {
     { // FIX: removed dangling try
       const res = await DeviceOrientationEvent.requestPermission();
       if (res !== "granted") { ui.gyro.checked = false; return; }
-    } catch {
-      ui.gyro.checked = false;
-      return;
-    }
   }
   gyroEnabled = true;
 });
@@ -2463,8 +2442,6 @@ async function pullNearbyWorldBlocks(){
 
 function clearRealtime(){
   for (const ch of realtimeChannels){
-    { // FIX: removed dangling try supabase.removeChannel(ch); } catch {}
-  }
   realtimeChannels = [];
 }
 
@@ -2698,13 +2675,7 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     setStatus("Auth OK. Creating profile...");
     { // FIX: removed dangling try selfUsername = await ensurePlayerProfile(sess);
       await refreshSelfProfile();
-      startMobTickerIfAllowed(); } catch(e){ setStatus("Profile error: " + (e.message||e)); return; }
-    setStatus("Joining world...");
-    await ensureWorld();
-    if (!worldId){
-      setStatus("World missing. Run SQL setup in Supabase.");
-      return;
-    }
+      startMobTickerIfAllowed(); }
     setStatus("World joined. Spawning...");
     let sy = terrainHeight(SPAWN_X, SPAWN_Z) + 3;
     // If underwater, pop above sea level
@@ -2720,11 +2691,6 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     // Hide auth panel after login
     document.getElementById("auth").style.display = "none";
     if (chat.root) chat.root.style.display = "";
-    { // FIX: removed dangling try await loadRecentChat(); } catch {}
-    { // FIX: removed dangling try await loadRecipes(); } catch {}
-    { // FIX: removed dangling try await loadMobs(); } catch {}
-
-  } else {
     clearRealtime();
     document.getElementById("auth").style.display = "";
     if (chat.root) chat.root.style.display = "none";
@@ -2823,18 +2789,6 @@ function maybeOriginShift(){
       }
     }
     }
-  } catch {}
-  { // FIX: removed dangling try
-    for (const d of (typeof drops !== "undefined" ? drops : [])){
-      if (d && d.mesh){
-        d.mesh.position.x -= sx;
-        d.mesh.position.z -= sz;
-      }
-    }
-  } catch {}
-
-  console.log("[World] Origin shifted by", sx, sz, "new offsets:", WORLD_OFFSET_X, WORLD_OFFSET_Z);
-}
 
 function animate(){
   requestAnimationFrame(animate);
