@@ -3152,9 +3152,7 @@ if (SUPABASE_URL.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
 
 
 function getSelectedWorldSlug(){
-  const active = getActiveItem();
-    if (active.kind === "tool"){ setHint("You are holding a tool - select a block to place."); return; }
-    const sel = document.getElementById('world-select');
+  const sel = document.getElementById('world-select');
   const slug = (sel?.value || worldSlug || 'overworld');
   worldSlug = slug;
   localStorage.setItem('kidcraft_world', slug);
