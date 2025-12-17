@@ -3005,7 +3005,24 @@ window.addEventListener("mousedown", async (e)=>{
   if (e.button === 0){ // break
     const hit = raycastBlock();
     if (!hit) return;
-    const { x,y,z } = hit.object.userData;
+    
+    // Skip decorations (flowers, grass, mushrooms)
+    if (hit.object.userData && hit.object.userData.kind === 'decor') {
+      return; // Can't break decorations in this version
+    }
+    
+    // Safely extract coordinates
+    const userData = hit.object.userData || {};
+    const x = userData.x;
+    const y = userData.y;
+    const z = userData.z;
+    
+    // Validate coordinates exist
+    if (x === undefined || y === undefined || z === undefined) {
+      console.error("[Block] Hit object has no valid coordinates:", hit.object);
+      return;
+    }
+    
     if (y <= MIN_Y) { setHint("Too deep - unbreakable layer."); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
