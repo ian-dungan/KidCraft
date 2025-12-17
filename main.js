@@ -508,7 +508,7 @@ const chunkMeshes = new Map(); // chunkKey -> THREE.Group
 
 // Material palette (minimal starter; extend to your full materials table later)
 const BLOCKS = [
-  { code: "Grass_Block", name: "Grass", color: 0x2a8f3a },
+  { code: "grass_block", name: "Grass", color: 0x2a8f3a },
   { code: "dirt", name: "Dirt", color: 0x7a4f2a },
   { code: "stone", name: "Stone", color: 0x7a7a7a },
   { code: "sand", name: "Sand", color: 0xd7c87a },
@@ -540,7 +540,7 @@ function requiredToolFor(code){
   const rt = def?.props?.required_tool || def?.required_tool;
   if (rt) return rt;
 
-  if (c === "Grass_Block" || c === "dirt" || c === "sand" || c === "gravel") return "shovel";
+  if (c === "grass_block" || c === "dirt" || c === "sand" || c === "gravel") return "shovel";
   if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) return "axe";
   if (lc.includes("stone") || lc.includes("cobble") || lc.includes("ore")) return "pickaxe";
   return "hand";
@@ -577,7 +577,7 @@ function dropForBlock(code){
   if (lc.includes("lapis_ore")) return "lapis_lazuli";
   if (lc.includes("redstone_ore")) return "redstone";
 
-  if (c === "Grass_Block") return "dirt";
+  if (c === "grass_block") return "dirt";
   if (c === "stone") return "cobblestone";
   return c;
 }
@@ -648,7 +648,7 @@ function rand01_from_xz(x,z){
 function int(x){ return x|0; }
 
 function pickCommonHotbar(materials){
-  const want = ["Grass_Block","dirt","stone","cobblestone","sand","oak_planks","oak_log","gravel","torch"];
+  const want = ["grass_block","dirt","stone","cobblestone","sand","oak_planks","oak_log","gravel","torch"];
   const byCode = new Map(materials.map(m=>[m.code,m]));
   const out = [];
   for (const c of want){
@@ -814,7 +814,7 @@ function breakTimeFor(code, toolItem){
     base = Math.max(220, Math.min(6500, 180 + h*480));
   } else {
     const lc = c.toLowerCase();
-    if (c === "Grass_Block" || c === "dirt" || lc.includes("leaves")) base = 380;
+    if (c === "grass_block" || c === "dirt" || lc.includes("leaves")) base = 380;
     else if (c === "sand" || c === "gravel") base = 430;
     else if (lc.includes("log") || lc.includes("plank") || lc.includes("wood")) base = 620;
     else if (lc.includes("ore")) base = 1200;
@@ -902,7 +902,7 @@ function spawnBlockParticles(x,y,z, baseCode){
   const count = 10 + ((Math.random()*6)|0);
   const group = new THREE.Group();
   const tex = (()=>{
-    if (baseCode==="Grass_Block") return tex_grass_top();
+    if (baseCode==="grass_block") return tex_grass_top();
     if (baseCode==="dirt") return tex_dirt();
     if (baseCode==="sand") return tex_sand();
     if (baseCode==="stone" || baseCode==="cobblestone") return tex_stone();
@@ -1348,7 +1348,7 @@ function surfaceCodeUnderPlayer(){
 function stepSfxNameFor(code){
   const c = String(code||"");
   const lc = c.toLowerCase();
-  if (c === "Grass_Block" || lc.includes("Grass_Block")) return "step_grass";
+  if (c === "grass_block" || lc.includes("grass_block")) return "step_grass";
   if (c === "dirt") return "step_dirt";
   if (c === "sand") return "step_sand";
   if (c === "gravel") return "step_gravel";
@@ -1434,7 +1434,7 @@ function invConsume_LEGACY(inputs){
 function ensureStarterKit(){
   if (localStorage.getItem(invStorageKey()+"_init")) return;
   invAdd("dirt", 32);
-  invAdd("Grass_Block", 16);
+  invAdd("grass_block", 16);
   invAdd("cobblestone", 24);
   invAdd("oak_log", 8);
   invAdd("oak_planks", 16);
@@ -1859,7 +1859,7 @@ function terrainHeight(x,z){
 function isPlaceableBlock(code){
   const c = String(code||"");
   // quick accept for known block palette codes
-  if (["dirt","Grass_Block","stone","cobblestone","sand","gravel","oak_log","oak_planks"].includes(c)) return true;
+  if (["dirt","grass_block","stone","cobblestone","sand","gravel","oak_log","oak_planks"].includes(c)) return true;
   const def = (MATERIAL_DEFS && MATERIAL_DEFS.length) ? MATERIAL_DEFS.find(m=>m.code===c) : null;
   return def ? (def.category === "block") : false;
 }
@@ -1968,7 +1968,7 @@ function getBlockCode(x,y,z){
     if (b === "desert") return "sand";
     if (b === "snow") return "snow";
     if (b === "mountains") return "stone";
-    return "Grass_Block";  // Changed from grass_block to match materials table
+    return "grass_block";  // Changed from grass_block to match materials table
   }
   if (y >= h-3) {
     const b = biomeAt(x,z);
@@ -2172,7 +2172,7 @@ function matFor(code){
     });
   }
   // Hardcoded textured materials (override database)
-  else if (key === "Grass_Block"){
+  else if (key === "grass_block"){
     mat = grassMaterialArray();
   } else if (key === "dirt"){
     mat = texturedMat(tex_dirt());
@@ -2593,7 +2593,7 @@ function buildChunk(cx, cz){
           const biome = biomeAt(wx, wz);
           
           // Only place trees on grass, above water
-          if (h > SEA_LEVEL && getBlock(wx, h, wz) === "Grass_Block") {
+          if (h > SEA_LEVEL && getBlock(wx, h, wz) === "grass_block") {
             tryPlaceTree(setBlock, wx, h, wz, biome);
           }
         }
@@ -2638,7 +2638,7 @@ function buildChunk(cx, cz){
         created.add(blockKey(wx,y,wz));
 
         // Decorations: tall grass, flowers, mushrooms on exposed grass tops
-        if (code === "Grass_Block" && getBlockCode(wx,y+1,wz) === "air"){
+        if (code === "grass_block" && getBlockCode(wx,y+1,wz) === "air"){
           // Tall grass (8% chance)
           if (shouldPlaceTallGrass(wx,y,wz)){
             const plant = makeTallGrassMesh();
@@ -2946,8 +2946,8 @@ async function placeBlockServer(world_id, x,y,z, code){
   // Use world_blocks table (UUID world_id, integer material_id)
   // Fallback: grass_block -> grass if not found
   let material = MATERIAL_DEFS.find(m => m.code === code);
-  if (!material && code === "Grass_Block") {
-    material = MATERIAL_DEFS.find(m => m.code === "Grass_Block");
+  if (!material && code === "grass_block") {
+    material = MATERIAL_DEFS.find(m => m.code === "grass_block");
   }
   
   const material_id = material?.id || null;
