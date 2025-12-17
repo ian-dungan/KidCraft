@@ -1125,27 +1125,215 @@ function tone(freq=440, dur=0.06, type="sine", vol=0.06){
   o.stop(t0 + dur + 0.02);
 }
 
-function playSfx(kind){
-  // Enhanced sound effects with variety
-  if (kind === "break") return tone(220 + Math.random()*40, 0.12, "square", 0.08);
-  if (kind === "place") return tone(480 + Math.random()*80, 0.08, "triangle", 0.06);
-  if (kind === "jump")  return tone(660, 0.10, "sine", 0.07);
-  if (kind === "step")  return tone(160 + Math.random()*40, 0.04, "triangle", 0.04);
+// Create noise buffer for realistic sounds
+function createNoiseBuffer(duration) {
+  if (!audioCtx) return null;
+  const sampleRate = audioCtx.sampleRate;
+  const bufferSize = sampleRate * duration;
+  const buffer = audioCtx.createBuffer(1, bufferSize, sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  return buffer;
+}
+
+// Minecraft-like block break sound (layered + crackling)
+function blockBreakSound() {
+  if (!audioUnlocked || !audioCtx) return;
+  const t0 = audioCtx.currentTime;
   
-  // Ambient sounds
+  // Layer 1: Low thump
+  const osc1 = audioCtx.createOscillator();
+  const gain1 = audioCtx.createGain();
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(180, t0);
+  osc1.frequency.exponentialRampToValueAtTime(120, t0 + 0.1);
+  gain1.gain.setValueAtTime(0.15, t0);
+  gain1.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12);
+  osc1.connect(gain1);
+  gain1.connect(audioCtx.destination);
+  osc1.start(t0);
+  osc1.stop(t0 + 0.15);
+  
+  // Layer 2: Mid crack
+  const osc2 = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+  osc2.type = 'square';
+  osc2.frequency.setValueAtTime(350, t0);
+  osc2.frequency.exponentialRampToValueAtTime(250, t0 + 0.08);
+  gain2.gain.setValueAtTime(0.08, t0);
+  gain2.gain.exponentialRampToValueAtTime(0.001, t0 + 0.1);
+  osc2.connect(gain2);
+  gain2.connect(audioCtx.destination);
+  osc2.start(t0);
+  osc2.stop(t0 + 0.12);
+  
+  // Layer 3: High pitch variation for texture
+  const osc3 = audioCtx.createOscillator();
+  const gain3 = audioCtx.createGain();
+  osc3.type = 'triangle';
+  osc3.frequency.setValueAtTime(800 + Math.random() * 200, t0);
+  gain3.gain.setValueAtTime(0.04, t0);
+  gain3.gain.exponentialRampToValueAtTime(0.001, t0 + 0.06);
+  osc3.connect(gain3);
+  gain3.connect(audioCtx.destination);
+  osc3.start(t0);
+  osc3.stop(t0 + 0.08);
+  
+  // Layer 4: Noise for crackle
+  const noise = audioCtx.createBufferSource();
+  const noiseFilter = audioCtx.createBiquadFilter();
+  const noiseGain = audioCtx.createGain();
+  noise.buffer = createNoiseBuffer(0.08);
+  noiseFilter.type = 'bandpass';
+  noiseFilter.frequency.value = 3000;
+  noiseFilter.Q.value = 2;
+  noiseGain.gain.setValueAtTime(0.06, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.08);
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(audioCtx.destination);
+  noise.start(t0);
+}
+
+// Minecraft-like block place sound (solid thunk)
+function blockPlaceSound() {
+  if (!audioUnlocked || !audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  
+  // Layer 1: Deep thunk
+  const osc1 = audioCtx.createOscillator();
+  const gain1 = audioCtx.createGain();
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(120, t0);
+  osc1.frequency.exponentialRampToValueAtTime(80, t0 + 0.05);
+  gain1.gain.setValueAtTime(0.2, t0);
+  gain1.gain.exponentialRampToValueAtTime(0.001, t0 + 0.08);
+  osc1.connect(gain1);
+  gain1.connect(audioCtx.destination);
+  osc1.start(t0);
+  osc1.stop(t0 + 0.1);
+  
+  // Layer 2: Mid click
+  const osc2 = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+  osc2.type = 'triangle';
+  osc2.frequency.setValueAtTime(400, t0);
+  gain2.gain.setValueAtTime(0.1, t0);
+  gain2.gain.exponentialRampToValueAtTime(0.001, t0 + 0.04);
+  osc2.connect(gain2);
+  gain2.connect(audioCtx.destination);
+  osc2.start(t0);
+  osc2.stop(t0 + 0.06);
+  
+  // Layer 3: Subtle noise
+  const noise = audioCtx.createBufferSource();
+  const noiseFilter = audioCtx.createBiquadFilter();
+  const noiseGain = audioCtx.createGain();
+  noise.buffer = createNoiseBuffer(0.03);
+  noiseFilter.type = 'lowpass';
+  noiseFilter.frequency.value = 2000;
+  noiseGain.gain.setValueAtTime(0.03, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.03);
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(audioCtx.destination);
+  noise.start(t0);
+}
+
+// Minecraft-like footstep (varies by material)
+function footstepSound(material = 'dirt') {
+  if (!audioUnlocked || !audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  
+  let baseFreq = 120;
+  let noiseAmount = 0.08;
+  let duration = 0.08;
+  
+  // Adjust based on material
+  if (material.includes('stone') || material.includes('ore')) {
+    baseFreq = 180;
+    noiseAmount = 0.06;
+    duration = 0.06;
+  } else if (material.includes('wood') || material.includes('plank')) {
+    baseFreq = 250;
+    noiseAmount = 0.05;
+    duration = 0.07;
+  } else if (material.includes('grass')) {
+    baseFreq = 150;
+    noiseAmount = 0.1;
+    duration = 0.09;
+  } else if (material.includes('sand')) {
+    baseFreq = 200;
+    noiseAmount = 0.12;
+    duration = 0.1;
+  }
+  
+  // Soft thump
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(baseFreq, t0);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.7, t0 + duration);
+  gain.gain.setValueAtTime(0.08, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.02);
+  
+  // Texture noise
+  const noise = audioCtx.createBufferSource();
+  const noiseFilter = audioCtx.createBiquadFilter();
+  const noiseGain = audioCtx.createGain();
+  noise.buffer = createNoiseBuffer(duration);
+  noiseFilter.type = 'lowpass';
+  noiseFilter.frequency.value = 1500;
+  noiseGain.gain.setValueAtTime(noiseAmount, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + duration * 0.6);
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(audioCtx.destination);
+  noise.start(t0);
+}
+
+function playSfx(kind){
+  // Minecraft-like sounds
+  if (kind === "break") return blockBreakSound();
+  if (kind === "place") return blockPlaceSound();
+  if (kind === "jump")  return tone(660, 0.10, "sine", 0.07);
+  if (kind === "step")  {
+    const material = surfaceCodeUnderPlayer() || 'dirt';
+    return footstepSound(material);
+  }
+  
+  // Ambient sounds (more subtle)
   if (kind === "ambient_birds") {
-    // Chirping birds (daytime)
-    const freq = 1600 + Math.random() * 800;
-    return tone(freq, 0.15, "sine", 0.03);
+    const freq = 1800 + Math.random() * 600;
+    return tone(freq, 0.12, "sine", 0.02);
   }
   if (kind === "ambient_crickets") {
-    // Cricket chirps (nighttime)
-    const freq = 2200 + Math.random() * 400;
-    return tone(freq, 0.12, "sine", 0.025);
+    const freq = 2400 + Math.random() * 300;
+    return tone(freq, 0.1, "sine", 0.018);
   }
   if (kind === "ambient_wind") {
-    // Wind swoosh (anytime)
-    return tone(180 + Math.random() * 100, 1.2, "sine", 0.02);
+    // Wind with noise
+    if (!audioUnlocked || !audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const noise = audioCtx.createBufferSource();
+    const filter = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
+    noise.buffer = createNoiseBuffer(1.5);
+    filter.type = 'lowpass';
+    filter.frequency.value = 400;
+    filter.Q.value = 1;
+    gain.gain.setValueAtTime(0.015, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + 1.3);
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    noise.start(t0);
   }
 }
 
