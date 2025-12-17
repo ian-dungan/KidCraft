@@ -2,110 +2,45 @@ html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #87CEEB; /* Sky blue background for login */
+  background: #000;
   font-family: system-ui, sans-serif;
 }
 
 canvas { display:block; }
 
-/* Game container - initially hidden */
-#game-container {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  display: none; /* Hidden until logged in */
-  background: #000;
-}
-
-#game-container.active {
-  display: block;
-}
-
-/* Auth panel - full screen centered login */
 #auth {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10000;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: rgba(0,0,0,0.6);
+  padding: 10px;
+  border-radius: 10px;
   display: flex;
-  flex-direction: column;
+  gap: 6px;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
   color: #fff;
 }
 
-#auth.hidden {
-  display: none;
-}
-
-#auth::before {
-  content: 'KidCraft';
-  font-size: 48px;
-  font-weight: bold;
-  margin-bottom: 20px;
-  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-}
-
-#auth input, #auth button, #auth select {
-  padding: 12px 20px;
-  font-size: 16px;
+#auth input, #auth button {
+  padding: 8px;
+  font-size: 14px;
   border-radius: 8px;
   border: 0;
-  min-width: 280px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-
-#auth input {
-  background: rgba(255,255,255,0.95);
 }
 
 #auth button {
-  background: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.15);
   color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
 }
 
-#auth button:hover { 
-  background: rgba(255,255,255,0.35); 
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-}
+#auth button:hover { background: rgba(255,255,255,0.22); cursor:pointer; }
 
-#auth .row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-width: 280px;
-}
+#status { margin: 0; font-size: 12px; opacity: 0.9; flex-basis: 100%; }
 
-#auth .row label {
-  font-weight: 600;
-}
-
-#status { 
-  margin: 10px 0 0 0; 
-  font-size: 14px; 
-  opacity: 0.95; 
-  text-align: center;
-  max-width: 320px;
-}
-
-.toggle { 
-  display:flex; 
-  align-items:center; 
-  gap:8px; 
-  font-size:14px; 
-  user-select:none; 
-  opacity:0.95; 
-}
+.toggle { display:flex; align-items:center; gap:6px; font-size:12px; user-select:none; opacity:0.95; }
 
 #hud{
   position: fixed;
@@ -276,363 +211,3 @@ canvas { display:block; }
   background: rgba(255,255,255,0.10); color:#fff; padding: 6px 10px;
 }
 .recipe button:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
-
-
-
-/* ----- POLISH ----- */
-.slot{
-  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
-}
-.slot.active{
-  box-shadow: 0 0 0 2px rgba(255,255,255,0.65), 0 10px 24px rgba(0,0,0,0.35);
-  transform: translateY(-1px) scale(1.03);
-  background: rgba(255,255,255,0.08);
-}
-.slot.empty{
-  opacity: 0.35;
-  border-style: dashed;
-}
-
-/* Desktop: remove mobile touch zones + gyro toggle */
-@media (pointer: fine) {
-  #touch-left, #touch-right { display: none; }
-  #auth .toggle { display: none; }
-}
-
-/* Chat: slightly softer, less intrusive */
-#chat{
-  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
-}
-.chat-line{
-  transition: opacity 200ms ease;
-}
-
-
-/* Minecraft-ish hand/slot swing feedback */
-@keyframes handSwing {
-  0%   { transform: translateY(0) rotate(0deg) scale(1.0); }
-  35%  { transform: translateY(2px) rotate(-2deg) scale(0.98); }
-  70%  { transform: translateY(-2px) rotate(2deg) scale(1.02); }
-  100% { transform: translateY(0) rotate(0deg) scale(1.0); }
-}
-#hotbar.swing .slot.active{
-  animation: handSwing 140ms ease-out;
-}
-
-/* Hotbar icon/label */
-#hotbar .slot{ position: relative; overflow: hidden; }
-#hotbar .slot-icon{
-  width: 100%;
-  height: 60%;
-  border-radius: 6px;
-  margin: 2px auto 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-}
-#hotbar .slot-label{
-  font-size: 10px;
-  line-height: 1.1;
-  padding: 2px 2px 4px 2px;
-  opacity: 0.9;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#hotbar .slot.empty{ opacity: 0.35; border-style: dashed; }
-
-/* Inventory/Crafting panel */
-#invPanel{
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(920px, 94vw);
-  height: min(520px, 88vh);
-  background: rgba(10,12,16,0.92);
-  border: 2px solid rgba(255,255,255,0.15);
-  border-radius: 14px;
-  z-index: 9999;
-  display: none;
-  color: #e9eef7;
-  box-shadow: 0 14px 40px rgba(0,0,0,0.55);
-  backdrop-filter: blur(6px);
-}
-#invPanel .inv-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
-}
-#invPanel .inv-title{ font-weight: 800; letter-spacing: 0.3px; }
-#invPanel .inv-hint{ opacity: 0.8; font-size: 12px; }
-#invPanel .inv-body{
-  display:grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 12px 14px;
-  height: calc(100% - 54px);
-}
-#invPanel .inv-col{
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 12px;
-  padding: 10px;
-  overflow: auto;
-}
-#invPanel .inv-subtitle{
-  font-weight: 700;
-  opacity: 0.9;
-  margin-bottom: 8px;
-}
-.inv-items{ display:flex; flex-direction:column; gap:6px; }
-.inv-item{
-  display:flex; justify-content:space-between; align-items:center;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.06);
-}
-.inv-code{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; opacity: 0.95; }
-.inv-count{ font-weight: 800; }
-.inv-empty{ opacity: 0.65; padding: 8px; }
-
-.inv-recipes{ display:flex; flex-direction:column; gap:8px; }
-.inv-recipe{
-  text-align:left;
-  padding: 10px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.07);
-  color: #e9eef7;
-  cursor: pointer;
-}
-.inv-recipe:hover{ background: rgba(255,255,255,0.10); }
-.inv-recipe.disabled{ opacity: 0.45; cursor: not-allowed; }
-.inv-recipe-name{ font-weight: 800; margin-bottom: 2px; }
-.inv-recipe-req{ font-size: 12px; opacity: 0.8; }
-
-/* Hotbar counts */
-#hotbar .slot-count{
-  position:absolute;
-  right: 6px;
-  bottom: 6px;
-  font-weight: 900;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: rgba(0,0,0,0.55);
-  border: 1px solid rgba(255,255,255,0.12);
-}
-
- Invisible mobile touch zones */
-#touch-left, #touch-right {
-  position: fixed;
-  bottom: 0;
-  height: 50vh;
-  width: 50vw;
-  z-index: 9999;
-  opacity: 0;
-  background: transparent;
-  touch-action: none;
-}
-
-#touch-left { left: 0; }
-#touch-right { right: 0; }
-
-/* Chat UI */
-#chat{
-  position: fixed;
-  left: 10px;
-  bottom: 12px;
-  width: min(380px, 92vw);
-  max-height: 36vh;
-  z-index: 9500;
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 12px;
-  padding: 10px;
-  backdrop-filter: blur(6px);
-}
-#chat-messages{
-  overflow: auto;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: rgba(255,255,255,0.9);
-}
-.chat-line{
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 10px;
-  padding: 6px 8px;
-  line-height: 1.25;
-  word-break: break-word;
-}
-.chat-meta{
-  font-size: 11px;
-  opacity: 0.75;
-  margin-bottom: 2px;
-}
-#chat-form{
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-#chat-input{
-  flex: 1 1 auto;
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.35);
-  color: #fff;
-  outline: none;
-}
-#chat-send{
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.12);
-  color: #fff;
-}
-#chat-send:hover{ cursor:pointer; background: rgba(255,255,255,0.18); }
-
-#crafting-toggle{
-  position: fixed;
-  right: 12px;
-  bottom: 12px;
-  z-index: 9600;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.35);
-  color: #fff;
-  padding: 10px 12px;
-  pointer-events: auto;
-}
-#crafting-toggle:hover{ cursor:pointer; background: rgba(255,255,255,0.12); }
-#crafting{
-  position: fixed;
-  right: 12px;
-  bottom: 60px;
-  width: min(420px, 92vw);
-  max-height: 55vh;
-  overflow: auto;
-  z-index: 9600;
-  background: rgba(0,0,0,0.45);
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 14px;
-  padding: 10px;
-  backdrop-filter: blur(6px);
-  pointer-events: auto;
-  color: rgba(255,255,255,0.92);
-}
-.crafting-header{
-  display:flex; align-items:center; justify-content:space-between;
-  margin-bottom: 8px;
-}
-.crafting-title{ font-weight:700; }
-#crafting-close{
-  border-radius: 10px; border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10); color:#fff; padding: 4px 10px;
-}
-#crafting-close:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
-.recipe{
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 12px;
-  padding: 8px;
-  margin-bottom: 8px;
-  background: rgba(0,0,0,0.25);
-}
-.recipe-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.recipe-name{ font-weight: 700; }
-.recipe-ings{ opacity: 0.9; font-size: 12px; margin-top: 4px; }
-.recipe button{
-  border-radius: 10px; border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10); color:#fff; padding: 6px 10px;
-}
-.recipe button:hover{ cursor:pointer; background: rgba(255,255,255,0.16); }
-
-
-
-/* ----- POLISH ----- */
-.slot{
-  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
-}
-.slot.active{
-  box-shadow: 0 0 0 2px rgba(255,255,255,0.65), 0 10px 24px rgba(0,0,0,0.35);
-  transform: translateY(-1px) scale(1.03);
-  background: rgba(255,255,255,0.08);
-}
-.slot.empty{
-  opacity: 0.35;
-  border-style: dashed;
-}
-
-/* Desktop: remove mobile touch zones + gyro toggle */
-@media (pointer: fine) {
-  #touch-left, #touch-right { display: none; }
-  #auth .toggle { display: none; }
-}
-
-/* Chat: slightly softer, less intrusive */
-#chat{
-  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
-}
-.chat-line{
-  transition: opacity 200ms ease;
-}
-
-.modal.hidden{ display:none; }
-.modal{
-  position: fixed; inset:0; background: rgba(0,0,0,.55);
-  display:flex; align-items:center; justify-content:center; z-index: 9999;
-}
-.modal-card{
-  width: min(520px, 92vw);
-  background: rgba(20,20,22,.96);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 12px;
-  padding: 14px;
-  color: #eee;
-  box-shadow: 0 20px 60px rgba(0,0,0,.55);
-}
-.modal-title{ font-weight:700; margin-bottom: 10px; }
-.modal-hint{ margin-top: 10px; opacity:.9; font-size: 12px; }
-.furnace-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.fslot{ background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); border-radius: 10px; padding:10px; }
-.slab{ font-size: 12px; opacity:.85; margin-bottom: 6px; }
-.fslot input{ width:100%; margin: 4px 0; padding: 6px 8px; border-radius: 8px; border:1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.35); color:#eee; }
-.furnace-actions{ display:flex; gap: 10px; justify-content:flex-end; margin-top: 12px; }
-.furnace-actions button{ padding: 8px 10px; border-radius: 10px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.08); color:#eee; cursor:pointer; }
-
-/* Fix chat messages visibility */
-#chat-messages { min-height: 100px !important; }
-
-
-/* MOBILE FIX: Chat must be above touch zones */
-#touch-left, #touch-right {
-  z-index: 9000 !important; /* Below chat (9500) */
-}
-#chat {
-  z-index: 9500 !important; /* Above touch zones */
-}
-
-
-/* HOTBAR AT TOP OF SCREEN */
-#hud {
-  top: 0 !important;
-  bottom: auto !important;
-}
-
-#hotbar {
-  margin: 10px auto 0 auto !important;
-}
-
