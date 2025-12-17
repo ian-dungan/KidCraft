@@ -141,6 +141,82 @@ ui.guest.onclick = async () => {
 // WORLD DATA STRUCTURES
 // =======================
 const noise2D = createNoise2D();
+// =======================
+// Deterministic hashing (seeded by WORLD_SLUG) for stable worldgen
+// =======================
+function seedHash32(str){
+  const s = String(str ?? "");
+  let h = 2166136261;
+  for (let i=0;i<s.length;i++){
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+const _SEED_H32 = seedHash32(WORLD_SLUG || "overworld");
+function hash3i(x, y, z){
+  let h = (x|0) * 374761393 ^ (y|0) * 1274126177 ^ (z|0) * 668265263 ^ _SEED_H32;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+// =======================
+// === ORE GENERATION (Minecraft-ish, deterministic veins) ===
+// Generates ores relative to surface depth so it works with your current height model.
+function oreVeinCode(x,y,z,surfaceY){
+  if (y > surfaceY - 4) return null; // keep dirt/grass clean
+  const d = (surfaceY - y); // depth below surface
+
+  const cell = 10;
+  const cx = Math.floor(x / cell);
+  const cy = Math.floor(y / cell);
+  const cz = Math.floor(z / cell);
+
+  function inVein(tag, rMin, rMax, chance){
+    const h = hash3i(cx ^ seedHash32(tag), cy, cz);
+    const ox = (h & 1023) / 1023 * (cell-1);
+    const oy = ((h >>> 10) & 1023) / 1023 * (cell-1);
+    const oz = ((h >>> 20) & 1023) / 1023 * (cell-1);
+    const r  = rMin + (((h >>> 5) & 255) / 255) * (rMax - rMin);
+    const dx = x - (cx*cell + ox);
+    const dy = y - (cy*cell + oy);
+    const dz = z - (cz*cell + oz);
+    if (dx*dx + dy*dy + dz*dz > r*r) return false;
+    const pick = ((h >>> 12) & 0xFFFF) / 0xFFFF;
+    return pick < chance;
+  }
+
+  // Minecraft-ish depth bands (tuned for visibility in KidCraft)
+  if (d >= 4 && d <= 55){
+    if (inVein("coal", 2.4, 4.3, 0.28)) return "coal_ore";
+  }
+  if (d >= 6 && d <= 45){
+    if (inVein("copper", 2.6, 4.8, 0.22)) return "copper_ore";
+  }
+  if (d >= 8 && d <= 60){
+    if (inVein("iron", 2.2, 4.0, 0.20)) return "iron_ore";
+  }
+  if (d >= 18 && d <= 70){
+    if (inVein("lapis", 1.6, 2.6, 0.07)) return "lapis_ore";
+  }
+  if (d >= 22 && d <= 75){
+    if (inVein("gold", 1.8, 3.2, 0.10)) return "gold_ore";
+  }
+  if (d >= 28 && d <= 90){
+    if (inVein("redstone", 2.2, 3.8, 0.10)) return "redstone_ore";
+  }
+  if (d >= 40){
+    if (inVein("diamond", 1.3, 2.3, 0.025)) return "diamond_ore";
+  }
+  if (d >= 34){
+    if (inVein("emerald", 1.1, 1.9, 0.006)) return "emerald_ore";
+  }
+  return null;
+}
+function getStoneFill(x,y,z,surfaceY){
+  return oreVeinCode(x,y,z,surfaceY) || "stone";
+}
 
 // Simple voxel data: chunk key -> Map("x,y,z" => blockCode)
 const worldEdits = new Map(); // persisted server-side in world_blocks; cached client-side too.
@@ -401,7 +477,7 @@ function getBlockCode(x,y,z){
   if (y > h) return "air";
   if (y === h) return "grass_block";
   if (y >= h-3) return "dirt";
-  return "stone";
+  return getStoneFill(x,y,z,h);
 }
 
 const geom = new THREE.BoxGeometry(1,1,1);
@@ -1159,28 +1235,10 @@ async function loadRecipes(){
 const mobs = new Map(); // mob_id -> mesh
 function mobMesh(type){
   const geom = new THREE.BoxGeometry(0.9,0.9,0.9);
-
-  // Cheap, readable colors (placeholder models) so you can tell mob types at a glance.
-  const passive = (type === "cow" || type === "pig" || type === "sheep" || type === "chicken");
-  const hostile = (type === "zombie" || type === "skeleton" || type === "spider" || type === "slime");
-
-  let color = 0x66ccff; // default
-  if (type === "cow") color = 0x4b3a2a;
-  else if (type === "pig") color = 0xff9db5;
-  else if (type === "sheep") color = 0xe6e6e6;
-  else if (type === "chicken") color = 0xffffff;
-  else if (type === "zombie") color = 0x2d8a5a;
-  else if (type === "skeleton") color = 0xd7d7d7;
-  else if (type === "spider") color = 0x222222;
-  else if (type === "slime") color = 0x44ff66;
-
-  const mat = new THREE.MeshStandardMaterial({ color });
+  const mat = new THREE.MeshStandardMaterial({ color: type === "slime" ? 0x44ff66 : 0x66ccff });
   const m = new THREE.Mesh(geom, mat);
   m.castShadow = true;
   m.receiveShadow = true;
-  m.userData.mobType = type;
-  m.userData.isPassive = passive;
-  m.userData.isHostile = hostile;
   return m;
 }
 function upsertMob(row){
@@ -1208,18 +1266,12 @@ let mobTickTimer = null;
 function startMobTickerIfAllowed(){
   if (mobTickTimer) clearInterval(mobTickTimer);
   mobTickTimer = null;
-
-  // Any authenticated player may call; the SQL function uses an advisory lock so only ONE caller ticks per world.
+  // Only mods/admins, non-guest, to avoid multiple tickers on free tier.
   if (isGuest) return;
-
+  if (roleRank(selfRole) < 1) return;
   mobTickTimer = setInterval(async ()=>{
     if (!worldId) return;
-    const night = (timeOfDay < 0.23 || timeOfDay > 0.77);
-    try{
-      await supabase.rpc("rpc_mob_tick", { in_world_id: worldId, in_is_night: night });
-    }catch(e){
-      // Keep quiet; missing RPC or temporary auth issues shouldn't spam the console every second.
-    }
+    await supabase.rpc("rpc_mob_tick", { in_world_id: worldId });
   }, 1000);
 }
 
