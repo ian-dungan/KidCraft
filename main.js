@@ -2232,6 +2232,90 @@ function makeTallGrassMesh(){
   return g;
 }
 
+// ===================================
+// FLOWERS & MUSHROOMS
+// ===================================
+function shouldPlaceFlower(x, y, z){
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
+  return rand01_from_xz(gx * 7, gz * 13) < 0.025; // 2.5% chance
+}
+
+function shouldPlaceMushroom(x, y, z){
+  const gx = (x|0) + (WORLD_OFFSET_X|0);
+  const gz = (z|0) + (WORLD_OFFSET_Z|0);
+  return rand01_from_xz(gx * 11, gz * 19) < 0.01; // 1% chance (rare)
+}
+
+function makeFlowerMesh(){
+  // Simple flower: stem + colored head
+  const colors = [0xFFFF00, 0xFF0000, 0xFF69B4, 0x4169E1]; // Yellow, red, pink, blue
+  const color = colors[Math.floor(Math.random() * colors.length)];
+  
+  const g = new THREE.Group();
+  
+  // Stem (green thin box)
+  const stem = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.5, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x00AA00 })
+  );
+  stem.position.y = 0.25;
+  stem.castShadow = true;
+  
+  // Flower head (colored small box)
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.15, 0.15, 0.15),
+    new THREE.MeshStandardMaterial({ color })
+  );
+  head.position.y = 0.55;
+  head.castShadow = true;
+  
+  g.add(stem);
+  g.add(head);
+  g.userData.kind = "decor";
+  return g;
+}
+
+function makeMushroomMesh(){
+  // Simple mushroom: stem + cap
+  const types = ['red', 'brown'];
+  const type = types[Math.floor(Math.random() * types.length)];
+  const capColor = type === 'red' ? 0xFF0000 : 0x8B4513;
+  
+  const g = new THREE.Group();
+  
+  // Stem (beige box)
+  const stem = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.35, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0xEEDDCC })
+  );
+  stem.position.y = 0.175;
+  stem.castShadow = true;
+  
+  // Cap (colored, wider box)
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.15, 0.3),
+    new THREE.MeshStandardMaterial({ color: capColor })
+  );
+  cap.position.y = 0.4;
+  cap.castShadow = true;
+  
+  // White spot on red mushroom
+  if (type === 'red') {
+    const spot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.08, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    spot.position.set(0.08, 0.45, 0.08);
+    g.add(spot);
+  }
+  
+  g.add(stem);
+  g.add(cap);
+  g.userData.kind = "decor";
+  return g;
+}
+
 
 
 function tryPlaceVillage(setBlock, getH, getBlock, x, z, biome){
@@ -2553,13 +2637,29 @@ function buildChunk(cx, cz){
         group.add(mesh);
         created.add(blockKey(wx,y,wz));
 
-        // Decorations: tall grass on exposed grass tops (no collision, harvestable)
-        if (code === "Grass_Block" && getBlockCode(wx,y+1,wz) === "air" && shouldPlaceTallGrass(wx,y,wz)){
-          const plant = makeTallGrassMesh();
-          plant.position.set(wx+0.5, y+1.0, wz+0.5);
-          // subtle random rotation
-          plant.rotation.y = rand01((wx*31 ^ wz*17)>>>0) * Math.PI;
-          group.add(plant);
+        // Decorations: tall grass, flowers, mushrooms on exposed grass tops
+        if (code === "Grass_Block" && getBlockCode(wx,y+1,wz) === "air"){
+          // Tall grass (8% chance)
+          if (shouldPlaceTallGrass(wx,y,wz)){
+            const plant = makeTallGrassMesh();
+            plant.position.set(wx+0.5, y+1.0, wz+0.5);
+            plant.rotation.y = rand01((wx*31 ^ wz*17)>>>0) * Math.PI;
+            group.add(plant);
+          }
+          // Flowers (2.5% chance - don't overlap with grass)
+          else if (shouldPlaceFlower(wx,y,wz)){
+            const flower = makeFlowerMesh();
+            flower.position.set(wx+0.5, y+1.0, wz+0.5);
+            flower.rotation.y = rand01((wx*37 ^ wz*23)>>>0) * Math.PI * 2;
+            group.add(flower);
+          }
+          // Mushrooms (1% chance - rare, don't overlap)
+          else if (shouldPlaceMushroom(wx,y,wz)){
+            const mushroom = makeMushroomMesh();
+            mushroom.position.set(wx+0.5, y+1.0, wz+0.5);
+            mushroom.rotation.y = rand01((wx*43 ^ wz*29)>>>0) * Math.PI * 2;
+            group.add(mushroom);
+          }
         }
       }
     }
@@ -3604,6 +3704,13 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       console.warn("[Mobs] Failed to load:", err.message);
     });
     
+    // Load passive animals
+    loadAnimals().then(() => {
+      console.log("[Animals] Loaded and grazing");
+    }).catch(err => {
+      console.warn("[Animals] Failed to load:", err.message);
+    });
+    
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
@@ -4086,6 +4193,165 @@ function mobMesh(type){
   m.receiveShadow = true;
   return m;
 }
+
+// ===================================
+// ANIMAL SYSTEM (Passive Mobs)
+// ===================================
+const animals = new Map(); // id -> mesh
+
+function createAnimalMesh(type) {
+  const group = new THREE.Group();
+  
+  if (type === 'cow') {
+    // Body (brown box)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 0.8, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+    );
+    body.position.y = 0.5;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (smaller brown box)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.5, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+    );
+    head.position.set(0.6, 0.6, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+    // White spots
+    const spot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.3, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    spot.position.set(0.2, 0.7, 0.2);
+    group.add(spot);
+    
+  } else if (type === 'pig') {
+    // Body (pink box)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.0, 0.7, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xFFB6C1 })
+    );
+    body.position.y = 0.4;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (pink box)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.4, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xFFB6C1 })
+    );
+    head.position.set(0.5, 0.5, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+    // Snout (darker pink)
+    const snout = new THREE.Mesh(
+      new THREE.BoxGeometry(0.25, 0.15, 0.15),
+      new THREE.MeshStandardMaterial({ color: 0xFF69B4 })
+    );
+    snout.position.set(0.65, 0.5, 0);
+    group.add(snout);
+    
+  } else if (type === 'sheep') {
+    // Body (white fluffy box)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.0, 0.8, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    body.position.y = 0.5;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (black box)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.4, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x333333 })
+    );
+    head.position.set(0.5, 0.6, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+  } else if (type === 'chicken') {
+    // Body (white small box)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.5, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    body.position.y = 0.3;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (small white box)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.25, 0.25, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    head.position.set(0.35, 0.5, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+    // Beak (yellow tiny)
+    const beak = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.1, 0.1),
+      new THREE.MeshStandardMaterial({ color: 0xFFFF00 })
+    );
+    beak.position.set(0.45, 0.5, 0);
+    group.add(beak);
+    
+    // Red comb on top
+    const comb = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.15, 0.1),
+      new THREE.MeshStandardMaterial({ color: 0xFF0000 })
+    );
+    comb.position.set(0.35, 0.65, 0);
+    group.add(comb);
+  }
+  
+  return group;
+}
+
+function upsertAnimal(row) {
+  let mesh = animals.get(row.id);
+  if (!mesh) {
+    mesh = createAnimalMesh(row.type);
+    scene.add(mesh);
+    animals.set(row.id, mesh);
+  }
+  mesh.position.set(row.x, row.y, row.z);
+  mesh.rotation.y = row.yaw || 0;
+}
+
+async function loadAnimals() {
+  if (!worldId) return;
+  
+  // Try to ensure animals exist (will use same mobs table for now)
+  // In future, could create separate animals table
+  const { data, error } = await supabase.from("mobs")
+    .select("id, world_id, type, x,y,z,yaw,hp, updated_at")
+    .eq("world_id", worldId)
+    .in("type", ["cow", "pig", "sheep", "chicken"])
+    .limit(100);
+    
+  if (error) {
+    console.warn("[Animals] Failed to load:", error);
+    return;
+  }
+  
+  for (const row of (data || [])) {
+    upsertAnimal(row);
+  }
+  
+  console.log(`[Animals] Loaded ${data?.length || 0} animals`);
+}
+
+// ===================================
+// PARTICLE SYSTEM (Already exists above - using that)
+// ===================================
+
 function upsertMob(row){
   let mesh = mobs.get(row.id);
   if (!mesh){
