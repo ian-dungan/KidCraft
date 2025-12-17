@@ -724,15 +724,6 @@ async function loadMaterialsFromDB(){
   console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
 }
 
-// Ensure DB materials are loaded exactly once (prevents blue-leaf fallback during early chunk builds)
-let _materialsPromise = null;
-function ensureMaterialsLoaded(){
-  if (_materialsPromise) return _materialsPromise;
-  _materialsPromise = (async()=>{ await loadMaterialsFromDB(); return true; })();
-  return _materialsPromise;
-}
-
-
 
 
 // =======================
@@ -3707,15 +3698,6 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
   isGuest = isAnonymousSession(sess);
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
   if (sess?.user?.id){
-    const uid = sess?.user?.id || "";
-    const slug = (typeof getSelectedWorldSlug === "function") ? getSelectedWorldSlug() : "overworld";
-    const initKey = `${uid}|${slug}`;
-    if (_authInitKeyDone === initKey) return;
-    if (_authInitInFlight) return;
-    _authInitInFlight = true;
-    try {
-      // Ensure materials are loaded before building the first chunks (prevents blue-leaf fallback)
-      await ensureMaterialsLoaded();
     setStatus("Auth OK. Creating profile...");
     try {
       // Create profile if doesn't exist
@@ -3726,8 +3708,8 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       await refreshSelfProfile();
     } catch (err) {
       console.error("[Profile] Failed to create profile:", err);
-      setStatus("Profile creation failed (continuing): " + err.message);
-      // Continue world init even if profile upsert fails (timeouts can happen during auth refresh)
+      setStatus("Profile creation failed: " + err.message);
+      return;
     }
     
     startMobTickerIfAllowed();
@@ -3795,10 +3777,6 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
-// Auth init guards (Supabase auth refresh can fire onAuthStateChange multiple times)
-let _authInitInFlight = false;
-let _authInitKeyDone = "";
-
 
     // Hide auth panel after login, show game
     const authPanel = document.getElementById("auth");
@@ -3819,14 +3797,8 @@ let _authInitKeyDone = "";
     }
     
     if (chat.root) chat.root.style.display = "";
-    } finally {
-      _authInitInFlight = false;
-      _authInitKeyDone = initKey;
-    }
   } else {
     // Not logged in - show auth, hide game
-    _authInitKeyDone = "";
-    _authInitInFlight = false;
     clearRealtime();
     
     const authPanel = document.getElementById("auth");
