@@ -1950,7 +1950,16 @@ function matFor(code){
   const dbMaterial = MATERIAL_DEFS.find(m => m.code === key);
   if (dbMaterial && dbMaterial.props && dbMaterial.props.visual) {
     const visual = dbMaterial.props.visual;
-    const color = parseInt(visual.color) || 0x808080;
+    // Parse hex color string properly (e.g. "0x4f7942")
+    let color = 0x808080; // default gray
+    if (visual.color) {
+      if (typeof visual.color === 'string') {
+        // Remove "0x" prefix if present and parse as hex
+        color = parseInt(visual.color.replace('0x', ''), 16);
+      } else {
+        color = visual.color;
+      }
+    }
     mat = new THREE.MeshStandardMaterial({ 
       color: color,
       transparent: visual.transparent || false,
@@ -2162,16 +2171,24 @@ function tryPlaceTree(setBlock, x, y, z, biome){
   else if (biome === "forest" && rand01_from_xz(gx+31, gz-31) < 0.35) { trunk = "birch_log"; leaves = "birch_leaves"; }
 
   const h = (biome === "snow" ? 6 : 5) + Math.floor(rand01_from_xz(gx+17, gz-17) * 3); // 5..7 (snow 6..8)
+  
+  // FIXED: Trunk starts at y+1 (above ground), not y+2
   for (let i=1; i<=h; i++) setBlock(x, y+i, z, trunk);
 
   const top = y + h;
   const radius = (biome === "snow") ? 3 : 2;
+  
+  // Place leaves - make sure not to replace trunk
   for (let dy=-radius; dy<=radius; dy++){
     for (let dz=-radius; dz<=radius; dz++){
       for (let dx=-radius; dx<=radius; dx++){
         const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy);
         if (d > (radius*2 + 1)) continue;
         if (dy === radius && (Math.abs(dx) === radius || Math.abs(dz) === radius)) continue;
+        
+        // Don't replace trunk with leaves
+        if (dx === 0 && dz === 0 && dy >= -h && dy <= 0) continue;
+        
         setBlock(x+dx, top+dy, z+dz, leaves);
       }
     }
@@ -2433,6 +2450,148 @@ function applyEditLocal(world_id, x,y,z, code){
   map.set(blockKey(x,y,z), code === "air" ? "__air__" : code);
   cacheEdit(world_id, x,y,z, code);
   rebuildChunk(cx, cz);
+  
+  // GRAVITY SYSTEM: Check blocks above for gravity-affected blocks
+  if (code === "air" || code === "__air__") {
+    checkGravityAbove(world_id, x, y, z);
+  }
+}
+
+// Blocks that need support from below
+const GRAVITY_BLOCKS = new Set([
+  'sand', 'red_sand', 'gravel', 
+  'concrete_powder', 'white_concrete_powder', 'orange_concrete_powder',
+  'magenta_concrete_powder', 'light_blue_concrete_powder', 'yellow_concrete_powder',
+  'lime_concrete_powder', 'pink_concrete_powder', 'gray_concrete_powder',
+  'light_gray_concrete_powder', 'cyan_concrete_powder', 'purple_concrete_powder',
+  'blue_concrete_powder', 'brown_concrete_powder', 'green_concrete_powder',
+  'red_concrete_powder', 'black_concrete_powder'
+]);
+
+// Blocks that need a log below (tree leaves and logs)
+const TREE_BLOCKS = new Set([
+  'oak_leaves', 'spruce_leaves', 'birch_leaves', 'jungle_leaves',
+  'acacia_leaves', 'dark_oak_leaves', 'mangrove_leaves', 'cherry_leaves',
+  'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
+  'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log'
+]);
+
+function checkGravityAbove(world_id, x, y, z){
+  // Check block directly above
+  const aboveCode = getBlockCode(x, y+1, z);
+  
+  if (!aboveCode || aboveCode === "air" || aboveCode === "__air__") return;
+  
+  // CASE 1: Gravity-affected blocks (sand, gravel, concrete powder)
+  if (GRAVITY_BLOCKS.has(aboveCode)) {
+    makeBlockFall(world_id, x, y+1, z, aboveCode);
+    return;
+  }
+  
+  // CASE 2: Tree blocks - check if trunk is broken
+  if (TREE_BLOCKS.has(aboveCode)) {
+    // If a log is broken, break all leaves and logs above it
+    if (aboveCode.includes('_log')) {
+      breakTreeAbove(world_id, x, y+1, z);
+    } 
+    // If leaves detect no log below, they should also fall
+    else if (aboveCode.includes('_leaves')) {
+      if (!hasLogBelow(x, y+1, z, 5)) { // Check 5 blocks down for trunk
+        applyEditLocal(world_id, x, y+1, z, "air");
+        if (!isGuest) breakBlockServer(world_id, x, y+1, z);
+        checkGravityAbove(world_id, x, y+1, z); // Check next block up
+      }
+    }
+    return;
+  }
+  
+  // CASE 3: Blocks that need support - make them fall
+  // Excludes: water, lava, air, and blocks that can float (like torches, flowers, etc.)
+  const FLOATING_BLOCKS = new Set(['water', 'lava', 'air', '__air__', 'tall_grass', 'torch', 'redstone_torch']);
+  
+  if (!FLOATING_BLOCKS.has(aboveCode)) {
+    // Check if block has ANY solid support (not just directly below)
+    // For now, just make it fall if nothing below
+    const hasSupport = checkIfHasSupport(x, y+1, z);
+    if (!hasSupport) {
+      makeBlockFall(world_id, x, y+1, z, aboveCode);
+    }
+  }
+}
+
+function checkIfHasSupport(x, y, z){
+  // Check if block has solid support below
+  const below = getBlockCode(x, y-1, z);
+  
+  // Air or water = no support
+  if (!below || below === "air" || below === "__air__" || below === "water" || below === "lava") {
+    return false;
+  }
+  
+  // Everything else is considered solid support
+  return true;
+}
+
+function makeBlockFall(world_id, x, y, z, code){
+  // Make block fall until it hits something solid
+  let fallY = y;
+  while (fallY > MIN_Y) {
+    const below = getBlockCode(x, fallY-1, z);
+    if (below && below !== "air" && below !== "__air__") break;
+    fallY--;
+  }
+  
+  if (fallY < y) {
+    // Remove from original position
+    applyEditLocal(world_id, x, y, z, "air");
+    if (!isGuest) breakBlockServer(world_id, x, y, z);
+    
+    // Place at new position
+    applyEditLocal(world_id, x, fallY, z, code);
+    if (!isGuest) placeBlockServer(world_id, x, fallY, z, code);
+    
+    // Check if more blocks need to fall from above
+    checkGravityAbove(world_id, x, y, z);
+  }
+}
+
+function breakTreeAbove(world_id, x, y, z){
+  // Break all tree blocks above this point (logs and leaves)
+  for (let dy = 0; dy < 15; dy++) { // Max tree height ~15
+    const checkY = y + dy;
+    const code = getBlockCode(x, checkY, z);
+    
+    if (!code || code === "air" || code === "__air__") break;
+    if (!TREE_BLOCKS.has(code)) break;
+    
+    // Break this block
+    applyEditLocal(world_id, x, checkY, z, "air");
+    if (!isGuest) breakBlockServer(world_id, x, checkY, z);
+    
+    // Also break leaves in radius around logs
+    if (code.includes('_log')) {
+      for (let dz = -2; dz <= 2; dz++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const leafCode = getBlockCode(x+dx, checkY, z+dz);
+          if (leafCode && leafCode.includes('_leaves')) {
+            applyEditLocal(world_id, x+dx, checkY, z+dz, "air");
+            if (!isGuest) breakBlockServer(world_id, x+dx, checkY, z+dz);
+          }
+        }
+      }
+    }
+  }
+}
+
+function hasLogBelow(x, y, z, maxDepth){
+  // Check if there's a log within maxDepth blocks below
+  for (let dy = 0; dy < maxDepth; dy++) {
+    const code = getBlockCode(x, y-dy, z);
+    if (code && code.includes('_log')) return true;
+    if (code && code !== "air" && code !== "__air__" && !code.includes('_leaves')) return false;
+  }
+  return false;
 }
 
 async function placeBlockServer(world_id, x,y,z, code){
