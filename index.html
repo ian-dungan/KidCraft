@@ -18,11 +18,16 @@
   <link rel="icon" href="data:," />
 </head>
 <body>
-  <!-- AUTH UI -->
+  <!-- Game Container (initially hidden) -->
+  <div id="game-container">
+    <!-- Canvas will be appended here -->
+  </div>
+
+  <!-- AUTH UI (full screen login) -->
   <div id="auth">
     <input id="username" placeholder="Username" autocomplete="username"/>
     <input id="password" type="password" placeholder="Password" autocomplete="current-password"/>
-    <button id="signup">Sign Up</button>
+    <button id="signup" type="button">Sign Up</button>
     
       <div class="row">
         <label for="world-select">World</label>
@@ -33,8 +38,8 @@
         </select>
       </div>
     
-<button id="login">Log In</button>
-    <button id="guest">Guest</button>
+<button id="login" type="button">Log In</button>
+    <button id="guest" type="button">Guest</button>
     <label class="toggle">
       <input id="gyro" type="checkbox" />
       <span>Gyro</span>
@@ -52,7 +57,7 @@
   <div id="touch-left" aria-hidden="true"></div>
   <div id="touch-right" aria-hidden="true"></div>
 
-  <script type="module" src="main.js?v=20251217a"></script>
+  <script type="module" src="main.js?v=MP58"></script>
 
   <!-- Chat -->
   <div id="chat" aria-live="polite">
@@ -72,6 +77,35 @@
     </div>
     <div id="crafting-list"></div>
   </div>
+
+<div id="furnaceModal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-title">Furnace</div>
+    <div class="furnace-grid">
+      <div class="fslot">
+        <div class="slab">Input</div>
+        <input id="f_in_code" placeholder="code (e.g. iron_ore)" />
+        <input id="f_in_qty" type="number" min="0" value="0" />
+      </div>
+      <div class="fslot">
+        <div class="slab">Fuel</div>
+        <input id="f_fuel_code" placeholder="code (coal / plank)" />
+        <input id="f_fuel_qty" type="number" min="0" value="0" />
+      </div>
+      <div class="fslot">
+        <div class="slab">Output</div>
+        <input id="f_out_code" placeholder="output" disabled />
+        <input id="f_out_qty" type="number" min="0" value="0" disabled />
+      </div>
+    </div>
+    <div class="modal-hint" id="furnaceStatus">Ready.</div>
+    <div class="furnace-actions">
+      <button id="furnaceStartBtn">Start</button>
+      <button id="furnaceTakeBtn">Take Output</button>
+      <button id="furnaceCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
