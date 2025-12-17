@@ -51,13 +51,26 @@
   <div id="hud">
     <div id="hotbar"></div>
     <div id="hint"></div>
+    <!-- PHASE 3: Health Display -->
+    <div id="health-bar">
+      <div id="hearts"></div>
+    </div>
+  </div>
+
+  <!-- PHASE 3: Death Screen -->
+  <div id="death-screen" class="hidden">
+    <div class="death-content">
+      <h1>YOU DIED</h1>
+      <p>Score: <span id="death-score">0</span></p>
+      <button id="respawn-btn" type="button">Respawn</button>
+    </div>
   </div>
 
   <!-- Invisible mobile touch zones -->
   <div id="touch-left" aria-hidden="true"></div>
   <div id="touch-right" aria-hidden="true"></div>
 
-  <script type="module" src="main.js?v=MP60"></script>
+  <script type="module" src="main.js?v=MP61"></script>
 
   <!-- Chat -->
   <div id="chat" aria-live="polite">

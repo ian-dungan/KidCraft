@@ -10,6 +10,41 @@ if (typeof globalThis.smoothstep !== 'function') {
 // Local alias
 const smoothstep = globalThis.smoothstep;
 
+// =======================
+// === PHASE 3: HEALTH & COMBAT SYSTEM ===
+// =======================
+
+// Player health (20 = 10 hearts)
+let playerHealth = 20;
+let playerMaxHealth = 20;
+let playerDead = false;
+let lastDamageTime = 0;
+const DAMAGE_COOLDOWN = 500; // 0.5 seconds between hits
+
+// Combat settings
+const PLAYER_ATTACK_DAMAGE = 6; // 3 hearts per hit
+const PLAYER_ATTACK_RANGE = 4; // blocks
+const PLAYER_ATTACK_COOLDOWN = 500; // ms between attacks
+let lastAttackTime = 0;
+
+// Mob AI settings
+const MOB_CHASE_RANGE = 16; // blocks - how far mobs detect player
+const MOB_ATTACK_RANGE = 2; // blocks - how close to attack
+const MOB_ATTACK_DAMAGE = 2; // 1 heart per hit
+const MOB_ATTACK_COOLDOWN = 1000; // ms between mob attacks
+const MOB_MOVE_SPEED = 0.05; // blocks per tick
+
+// Passive mob movement
+const ANIMAL_WANDER_CHANCE = 0.02; // 2% chance per tick to change direction
+const ANIMAL_MOVE_SPEED = 0.02; // blocks per tick (slower than hostile)
+const ANIMAL_IDLE_TIME = 3000; // ms to stay idle before wandering
+
+// Mob state tracking
+const mobStates = new Map(); // mobId -> { lastAttack, target, wanderDir, lastWander }
+
+// Death state
+let deathScreenShown = false;
+
 
 // =======================
 // === SUPABASE PERSISTENCE (inventory/world/furnace) ===
@@ -3002,7 +3037,15 @@ function userId(){ return sessionUserId; }
 window.addEventListener("contextmenu", e=>e.preventDefault());
 window.addEventListener("mousedown", async (e)=>{
   if (isMobile()) return;
-  if (e.button === 0){ // break
+  if (e.button === 0){ // break / attack
+    // PHASE 3: Check for mob first
+    const mob = raycastMob();
+    if (mob) {
+      attackMob(mob);
+      return;
+    }
+    
+    // Then check for blocks
     const hit = raycastBlock();
     if (!hit) return;
     
@@ -3728,6 +3771,9 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       console.warn("[Animals] Failed to load:", err.message);
     });
     
+    // PHASE 3: Initialize combat system
+    setupCombat();
+    
     setHint((isGuest ? "Guest session. " : "") + (isMobile()
       ? "Left: move • Right: look • Tap: break • Double-tap: place"
       : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
@@ -3856,6 +3902,376 @@ function maybeOriginShift(){
       g.position.z -= sz;
     }
   }
+}
+
+// =======================
+// === PHASE 3: HEALTH & COMBAT SYSTEM ===
+// =======================
+
+// Initialize health UI
+function initHealthUI() {
+  const heartsContainer = document.getElementById('hearts');
+  if (!heartsContainer) return;
+  
+  heartsContainer.innerHTML = '';
+  const numHearts = playerMaxHealth / 2; // 20 health = 10 hearts
+  
+  for (let i = 0; i < numHearts; i++) {
+    const heart = document.createElement('div');
+    heart.className = 'heart';
+    heart.id = `heart-${i}`;
+    heartsContainer.appendChild(heart);
+  }
+  
+  updateHealthUI();
+}
+
+// Update health display
+function updateHealthUI() {
+  const numHearts = playerMaxHealth / 2;
+  
+  for (let i = 0; i < numHearts; i++) {
+    const heart = document.getElementById(`heart-${i}`);
+    if (!heart) continue;
+    
+    const heartValue = i * 2; // Each heart = 2 health
+    
+    if (playerHealth >= heartValue + 2) {
+      heart.className = 'heart full';
+    } else if (playerHealth >= heartValue + 1) {
+      heart.className = 'heart half';
+    } else {
+      heart.className = 'heart';
+    }
+  }
+}
+
+// Damage player
+function damagePlayer(amount) {
+  if (playerDead) return;
+  
+  const now = performance.now();
+  if (now - lastDamageTime < DAMAGE_COOLDOWN) return; // Damage cooldown
+  
+  lastDamageTime = now;
+  playerHealth = Math.max(0, playerHealth - amount);
+  
+  console.log(`[Combat] Player took ${amount} damage. Health: ${playerHealth}/${playerMaxHealth}`);
+  
+  // Update UI
+  updateHealthUI();
+  
+  // Flash red
+  showDamageFlash();
+  
+  // Play hurt sound
+  playSfx('break', 0.3); // Temporary - use hurt sound when available
+  
+  // Check if dead
+  if (playerHealth <= 0) {
+    playerDeath();
+  }
+}
+
+// Show damage flash effect
+function showDamageFlash() {
+  const flash = document.createElement('div');
+  flash.className = 'damage-flash';
+  document.body.appendChild(flash);
+  
+  setTimeout(() => {
+    flash.remove();
+  }, 300);
+}
+
+// Player death
+function playerDeath() {
+  if (playerDead) return;
+  
+  playerDead = true;
+  deathScreenShown = true;
+  
+  console.log('[Combat] Player died!');
+  
+  // Show death screen
+  const deathScreen = document.getElementById('death-screen');
+  if (deathScreen) {
+    deathScreen.classList.remove('hidden');
+    
+    // Calculate score (blocks broken + mobs killed)
+    const score = (window.DEBUG?.blocksbroken || 0) + (window.DEBUG?.mobsKilled || 0);
+    const scoreEl = document.getElementById('death-score');
+    if (scoreEl) scoreEl.textContent = score;
+  }
+  
+  // Stop movement
+  if (controls) {
+    controls.lock = () => {}; // Disable pointer lock
+  }
+}
+
+// Respawn player
+function respawnPlayer() {
+  console.log('[Combat] Respawning player...');
+  
+  playerDead = false;
+  deathScreenShown = false;
+  playerHealth = playerMaxHealth;
+  
+  // Hide death screen
+  const deathScreen = document.getElementById('death-screen');
+  if (deathScreen) {
+    deathScreen.classList.add('hidden');
+  }
+  
+  // Teleport to spawn
+  if (controls && controls.object) {
+    const spawnX = 100 - WORLD_OFFSET_X;
+    const spawnZ = 100 - WORLD_OFFSET_Z;
+    const spawnY = groundHeightAt(spawnX, spawnZ) + 2;
+    
+    controls.object.position.set(spawnX, spawnY, spawnZ);
+  }
+  
+  // Update UI
+  updateHealthUI();
+  
+  console.log('[Combat] Player respawned at spawn point');
+}
+
+// Setup respawn button
+function setupRespawnButton() {
+  const respawnBtn = document.getElementById('respawn-btn');
+  if (respawnBtn) {
+    respawnBtn.addEventListener('click', respawnPlayer);
+  }
+}
+
+// =======================
+// === HOSTILE MOB SYSTEM ===
+// =======================
+
+// Hostile mob types
+const HOSTILE_MOBS = new Set(['zombie', 'skeleton', 'spider', 'creeper']);
+const PASSIVE_MOBS = new Set(['cow', 'pig', 'sheep', 'chicken']);
+
+// Check if mob is hostile
+function isHostileMob(type) {
+  return HOSTILE_MOBS.has(type);
+}
+
+// Mob AI tick - runs for all mobs
+function updateMobAI() {
+  if (!scene || playerDead) return;
+  
+  const playerPos = controls?.object?.position;
+  if (!playerPos) return;
+  
+  // Update all mobs
+  scene.traverse((obj) => {
+    if (!obj.userData || !obj.userData.mobId) return;
+    
+    const mobId = obj.userData.mobId;
+    const mobType = obj.userData.mobType;
+    const mobHealth = obj.userData.hp || 10;
+    
+    // Skip dead mobs
+    if (mobHealth <= 0) return;
+    
+    // Get or create mob state
+    let state = mobStates.get(mobId);
+    if (!state) {
+      state = {
+        lastAttack: 0,
+        target: null,
+        wanderDir: { x: 0, z: 0 },
+        lastWander: 0
+      };
+      mobStates.set(mobId, state);
+    }
+    
+    const mobPos = obj.position;
+    const distToPlayer = Math.hypot(
+      playerPos.x - mobPos.x,
+      playerPos.z - mobPos.z
+    );
+    
+    // HOSTILE MOB AI
+    if (isHostileMob(mobType)) {
+      // Detect player in range
+      if (distToPlayer <= MOB_CHASE_RANGE) {
+        state.target = 'player';
+        
+        // Move towards player
+        if (distToPlayer > MOB_ATTACK_RANGE) {
+          const dx = playerPos.x - mobPos.x;
+          const dz = playerPos.z - mobPos.z;
+          const len = Math.hypot(dx, dz);
+          
+          mobPos.x += (dx / len) * MOB_MOVE_SPEED;
+          mobPos.z += (dz / len) * MOB_MOVE_SPEED;
+          
+          // Update Y position (ground following)
+          const groundY = groundHeightAt(mobPos.x, mobPos.z);
+          mobPos.y = groundY + 0.5; // Mob height offset
+          
+          // Face player
+          obj.rotation.y = Math.atan2(dx, dz);
+        }
+        // Attack player
+        else {
+          const now = performance.now();
+          if (now - state.lastAttack > MOB_ATTACK_COOLDOWN) {
+            state.lastAttack = now;
+            damagePlayer(MOB_ATTACK_DAMAGE);
+            console.log(`[Combat] ${mobType} attacked player!`);
+          }
+        }
+      } else {
+        state.target = null;
+      }
+    }
+    // PASSIVE MOB AI (wandering)
+    else if (PASSIVE_MOBS.has(mobType)) {
+      const now = performance.now();
+      
+      // Random chance to change direction
+      if (Math.random() < ANIMAL_WANDER_CHANCE || now - state.lastWander > ANIMAL_IDLE_TIME) {
+        state.lastWander = now;
+        
+        // Random direction
+        const angle = Math.random() * Math.PI * 2;
+        state.wanderDir = {
+          x: Math.cos(angle),
+          z: Math.sin(angle)
+        };
+      }
+      
+      // Move in wander direction
+      mobPos.x += state.wanderDir.x * ANIMAL_MOVE_SPEED;
+      mobPos.z += state.wanderDir.z * ANIMAL_MOVE_SPEED;
+      
+      // Update Y position
+      const groundY = groundHeightAt(mobPos.x, mobPos.z);
+      mobPos.y = groundY + 0.5;
+      
+      // Face movement direction
+      if (state.wanderDir.x !== 0 || state.wanderDir.z !== 0) {
+        obj.rotation.y = Math.atan2(state.wanderDir.x, state.wanderDir.z);
+      }
+    }
+  });
+}
+
+// =======================
+// === PLAYER COMBAT ===
+// =======================
+
+// Attack mob (called on left-click when targeting mob)
+function attackMob(mobMesh) {
+  if (playerDead) return;
+  
+  const now = performance.now();
+  if (now - lastAttackTime < PLAYER_ATTACK_COOLDOWN) return;
+  
+  lastAttackTime = now;
+  
+  // Get mob data
+  const mobId = mobMesh.userData.mobId;
+  const mobType = mobMesh.userData.mobType;
+  let mobHealth = mobMesh.userData.hp || 10;
+  
+  // Deal damage
+  mobHealth -= PLAYER_ATTACK_DAMAGE;
+  mobMesh.userData.hp = mobHealth;
+  
+  console.log(`[Combat] Player attacked ${mobType}. Health: ${mobHealth}`);
+  
+  // Knockback
+  const playerPos = controls.object.position;
+  const dx = mobMesh.position.x - playerPos.x;
+  const dz = mobMesh.position.z - playerPos.z;
+  const len = Math.hypot(dx, dz);
+  
+  if (len > 0) {
+    mobMesh.position.x += (dx / len) * 0.5;
+    mobMesh.position.z += (dz / len) * 0.5;
+  }
+  
+  // Play sound
+  playSfx('break', 0.4);
+  
+  // Check if mob died
+  if (mobHealth <= 0) {
+    console.log(`[Combat] ${mobType} killed!`);
+    
+    // Remove from scene
+    scene.remove(mobMesh);
+    
+    // Remove state
+    mobStates.delete(mobId);
+    
+    // Update server (if not guest)
+    if (!isGuest && worldId) {
+      supabase.from('mobs')
+        .delete()
+        .eq('id', mobId)
+        .then(() => console.log(`[Combat] Mob ${mobId} deleted from server`))
+        .catch(err => console.warn('[Combat] Failed to delete mob:', err));
+    }
+    
+    // Track kills
+    if (!window.DEBUG) window.DEBUG = {};
+    window.DEBUG.mobsKilled = (window.DEBUG.mobsKilled || 0) + 1;
+  }
+}
+
+// Raycast to find mob under crosshair
+function raycastMob() {
+  if (!camera || !scene) return null;
+  
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  
+  // Find all mob meshes
+  const mobs = [];
+  scene.traverse((obj) => {
+    if (obj.userData && obj.userData.mobId) {
+      mobs.push(obj);
+    }
+  });
+  
+  if (mobs.length === 0) return null;
+  
+  // Raycast
+  const intersects = raycaster.intersectObjects(mobs, true);
+  
+  if (intersects.length > 0) {
+    // Find the root mob mesh (not child parts)
+    let target = intersects[0].object;
+    while (target.parent && !target.userData.mobId) {
+      target = target.parent;
+    }
+    
+    const dist = intersects[0].distance;
+    if (dist <= PLAYER_ATTACK_RANGE) {
+      return target;
+    }
+  }
+  
+  return null;
+}
+
+// Setup combat - run after game initializes
+function setupCombat() {
+  // Health UI
+  initHealthUI();
+  setupRespawnButton();
+  
+  // Mob AI ticker (runs every 50ms)
+  setInterval(updateMobAI, 50);
+  
+  console.log('[Combat] Phase 3 combat system initialized');
 }
 
 function animate(){
@@ -4326,6 +4742,75 @@ function createAnimalMesh(type) {
     );
     comb.position.set(0.35, 0.65, 0);
     group.add(comb);
+    
+  // PHASE 3: HOSTILE MOBS
+  } else if (type === 'zombie') {
+    // Body (dark green)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 1.2, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x2E8B57 })
+    );
+    body.position.y = 0.7;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (green cube)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.5, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x3CB371 })
+    );
+    head.position.set(0, 1.4, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+    // Arms (hanging down)
+    const arm1 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.8, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x2E8B57 })
+    );
+    arm1.position.set(-0.4, 0.7, 0);
+    group.add(arm1);
+    
+    const arm2 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.8, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x2E8B57 })
+    );
+    arm2.position.set(0.4, 0.7, 0);
+    group.add(arm2);
+    
+  } else if (type === 'skeleton') {
+    // Body (white/bone colored)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 1.0, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0xF5F5DC })
+    );
+    body.position.y = 0.7;
+    body.castShadow = true;
+    group.add(body);
+    
+    // Head (skull - bone white)
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.5, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFE0 })
+    );
+    head.position.set(0, 1.3, 0);
+    head.castShadow = true;
+    group.add(head);
+    
+    // Arms (thin bone)
+    const arm1 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.7, 0.15),
+      new THREE.MeshStandardMaterial({ color: 0xF5F5DC })
+    );
+    arm1.position.set(-0.35, 0.7, 0);
+    group.add(arm1);
+    
+    const arm2 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.7, 0.15),
+      new THREE.MeshStandardMaterial({ color: 0xF5F5DC })
+    );
+    arm2.position.set(0.35, 0.7, 0);
+    group.add(arm2);
   }
   
   return group;
@@ -4335,11 +4820,25 @@ function upsertAnimal(row) {
   let mesh = animals.get(row.id);
   if (!mesh) {
     mesh = createAnimalMesh(row.type);
+    
+    // Store mob data for AI system
+    mesh.userData = {
+      mobId: row.id,
+      mobType: row.type,
+      hp: row.hp || 10
+    };
+    
     scene.add(mesh);
     animals.set(row.id, mesh);
   }
+  
   mesh.position.set(row.x, row.y, row.z);
   mesh.rotation.y = row.yaw || 0;
+  
+  // Update health if changed
+  if (row.hp !== undefined) {
+    mesh.userData.hp = row.hp;
+  }
 }
 
 async function loadAnimals() {
@@ -4372,13 +4871,30 @@ async function loadAnimals() {
 function upsertMob(row){
   let mesh = mobs.get(row.id);
   if (!mesh){
-    mesh = mobMesh(row.type);
+    // PHASE 3: Use createAnimalMesh for all mob types
+    mesh = createAnimalMesh(row.type);
+    
+    // Store mob data in userData for combat system
+    mesh.userData = {
+      mobId: row.id,
+      mobType: row.type,
+      hp: row.hp || 10
+    };
+    
     scene.add(mesh);
     mobs.set(row.id, mesh);
   }
+  
+  // Update position and rotation
   mesh.position.set(row.x, row.y, row.z);
   mesh.rotation.y = row.yaw || 0;
+  
+  // Update health if changed
+  if (row.hp !== undefined) {
+    mesh.userData.hp = row.hp;
+  }
 }
+
 async function loadMobs(){
   if (!worldId) return;
   // ensure baseline mobs exist
@@ -4388,7 +4904,11 @@ async function loadMobs(){
     .eq("world_id", worldId)
     .limit(200);
   if (error) return;
-  for (const row of (data||[])) upsertMob(row);
+  
+  console.log(`[Mobs] Loading ${data?.length || 0} mobs...`);
+  for (const row of (data||[])) {
+    upsertMob(row);
+  }
 }
 let mobTickTimer = null;
 function startMobTickerIfAllowed(){
