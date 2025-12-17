@@ -1126,11 +1126,27 @@ function tone(freq=440, dur=0.06, type="sine", vol=0.06){
 }
 
 function playSfx(kind){
-  // tiny "gamey" cues
-  if (kind === "break") return tone(220, 0.05, "square", 0.05);
-  if (kind === "place") return tone(520, 0.04, "triangle", 0.045);
-  if (kind === "jump")  return tone(660, 0.06, "sine", 0.05);
-  if (kind === "step")  return tone(160 + Math.random()*40, 0.03, "triangle", 0.03);
+  // Enhanced sound effects with variety
+  if (kind === "break") return tone(220 + Math.random()*40, 0.12, "square", 0.08);
+  if (kind === "place") return tone(480 + Math.random()*80, 0.08, "triangle", 0.06);
+  if (kind === "jump")  return tone(660, 0.10, "sine", 0.07);
+  if (kind === "step")  return tone(160 + Math.random()*40, 0.04, "triangle", 0.04);
+  
+  // Ambient sounds
+  if (kind === "ambient_birds") {
+    // Chirping birds (daytime)
+    const freq = 1600 + Math.random() * 800;
+    return tone(freq, 0.15, "sine", 0.03);
+  }
+  if (kind === "ambient_crickets") {
+    // Cricket chirps (nighttime)
+    const freq = 2200 + Math.random() * 400;
+    return tone(freq, 0.12, "sine", 0.025);
+  }
+  if (kind === "ambient_wind") {
+    // Wind swoosh (anytime)
+    return tone(180 + Math.random() * 100, 1.2, "sine", 0.02);
+  }
 }
 
 
@@ -3575,6 +3591,19 @@ function animate(){
   }
   scene.background = sky;
   if (scene.fog) scene.fog.color.copy(sky);
+
+  // Ambient sounds (play periodically based on time of day)
+  if (Math.random() < 0.002) { // ~0.2% chance per frame = every few seconds
+    if (sunH > 0.4) {
+      // Daytime: birds chirping
+      if (Math.random() < 0.7) playSfx("ambient_birds");
+      else playSfx("ambient_wind");
+    } else {
+      // Night: crickets chirping
+      if (Math.random() < 0.8) playSfx("ambient_crickets");
+      else playSfx("ambient_wind");
+    }
+  }
 
   // Movement input
   let forwardInput = (keys.w ? 1 : 0) + (keys.s ? -1 : 0) + touchMoveForward;
