@@ -468,6 +468,8 @@ ui.signup.onclick = async () => {
 };
 
 ui.login.onclick = async () => {
+  _enterConfirmed = true;
+
   const raw = ui.username?.value || "";
   const u = normalizeUsername(raw);
   const p = ui.password?.value || "";
@@ -535,6 +537,24 @@ function initializeNoise(seed) {
   // Create noise with seeded RNG
   noise2D = createNoise2D(alea);
   console.log("[Noise] Noise function initialized with seed");
+}
+
+function hideAuthPanelShowGame(){
+  try{
+    const authPanel = document.getElementById("authPanel");
+    const gameContainer = document.getElementById("gameContainer");
+    if (authPanel) authPanel.classList.add("hidden");
+    if (gameContainer) gameContainer.classList.remove("hidden");
+    console.log("[Auth] Auth panel hidden - user logged in");
+  } catch(e){ console.warn("[Auth] UI toggle failed:", e); }
+}
+function showAuthPanelHideGame(){
+  try{
+    const authPanel = document.getElementById("authPanel");
+    const gameContainer = document.getElementById("gameContainer");
+    if (authPanel) authPanel.classList.remove("hidden");
+    if (gameContainer) gameContainer.classList.add("hidden");
+  } catch(e){}
 }
 
 // Simple voxel data: chunk key -> Map("x,y,z" => blockCode)
@@ -642,6 +662,15 @@ let ORE_CODES = [];              // codes tagged 'ore'
 let COMMON_BLOCKS = [];          // curated list for hotbar
 let MATERIALS_READY = false;
 
+let _materialsPromise = null;
+function ensureMaterialsLoaded(){
+  if (MATERIALS_READY) return Promise.resolve(true);
+  if (_materialsPromise) return _materialsPromise;
+  _materialsPromise = (async ()=>{ await loadMaterialsFromDB(); return true; })();
+  return _materialsPromise;
+}
+
+
 function hashColor(str){
   // Deterministic color without external libs (no colorsys dependency)
   const s = String(str ?? "");
@@ -708,7 +737,7 @@ async function loadMaterialsFromDB(){
     .eq("category","block")
     .limit(5000);
   if (error) { console.warn("[Materials] load failed:", error.message); return; }
-  MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
+  MATERIAL_DEFS.splice(0, MATERIAL_DEFS.length, ...((data || []).filter(m=>m.code && m.code !== "air")));
   ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
   COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
   // If we found a decent set, replace BLOCKS used by hotbar/material palette.
@@ -2808,6 +2837,7 @@ const GRAVITY_BLOCKS = new Set([
 ]);
 
 // Blocks that need a log below (tree leaves and logs)
+const TREE_FELLING_ENABLED = false; // set true if you want whole-tree removal/decay
 const TREE_BLOCKS = new Set([
   'oak_leaves', 'spruce_leaves', 'birch_leaves', 'jungle_leaves',
   'acacia_leaves', 'dark_oak_leaves', 'mangrove_leaves', 'cherry_leaves',
@@ -2828,7 +2858,7 @@ function checkGravityAbove(world_id, x, y, z){
   }
   
   // CASE 2: Tree blocks - check if trunk is broken
-  if (TREE_BLOCKS.has(aboveCode)) {
+  if (TREE_FELLING_ENABLED && TREE_BLOCKS.has(aboveCode)) {
     // If a log is broken, break all leaves and logs above it
     if (aboveCode.includes('_log')) {
       breakTreeAbove(world_id, x, y+1, z);
@@ -3691,179 +3721,106 @@ window.clearDatabaseBlocks = async function() {
 };
 
 // =======================
-// LOGIN FLOW BOOTSTRAP
-// =======================
 
-// =======================
-// INIT GUARDS + MATERIALS LOADER (patched)
-// =======================
 let _authInitInFlight = false;
 let _authInitKeyDone = "";
-let _materialsPromise = null;
+let _enterConfirmed = false;
+let _pendingSession = null;
 
-function ensureMaterialsLoaded() {
-  if (_materialsPromise) return _materialsPromise;
-  _materialsPromise = (async () => {
-    try {
-      await loadMaterialsFromDB();
-    } catch (e) {
-      console.error("[Materials] loadMaterialsFromDB failed:", e);
-      // Keep promise rejected? No: allow retries on next call.
-      _materialsPromise = null;
-      throw e;
-    }
-    return true;
-  })();
-  return _materialsPromise;
-}
-supabase.auth.onAuthStateChange(async (_event, sess) => {
-  setSessionUserId(sess);
-  isGuest = isAnonymousSession(sess);
+async function initGameForSession(sess){
+  // prevent overlapping inits
+  if (_authInitInFlight) return;
+  const uid = sess?.user?.id || "";
+  const slug = getSelectedWorldSlug ? getSelectedWorldSlug() : "overworld";
+  const key = `${uid}|${slug}`;
+  if (_authInitKeyDone === key) return;
+  _authInitInFlight = true;
+  try{
+    // Ensure materials are ready BEFORE any chunks/edits
+    await ensureMaterialsLoaded();
 
-  // Always update UI visibility based on auth state, even if we skip heavy init.
-  const authPanel = document.getElementById("auth");
-  const gameContainer = document.getElementById("game-container");
-  if (sess?.user?.id) {
-    if (authPanel) authPanel.classList.add('hidden');
-    if (gameContainer) gameContainer.classList.add('active');
-  } else {
-    if (authPanel) authPanel.classList.remove('hidden');
-    if (gameContainer) gameContainer.classList.remove('active');
-  }
-  spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
-  if (sess?.user?.id){
+    isGuest = isAnonymousSession(sess);
+    spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
 
-    const uid = sess.user.id;
-    const slug = (typeof getSelectedWorldSlug === "function" ? getSelectedWorldSlug() : "overworld");
-    const key = `${uid}|${slug}`;
-    if (_authInitKeyDone === key) {
-      // Already initialized for this user+world; keep UI shown but skip heavy init.
-      return;
-    }
-    if (_authInitInFlight) return;
-    _authInitInFlight = true;
-    let _authInitSucceeded = false;
-    try {
-      await ensureMaterialsLoaded();
-    setStatus("Auth OK. Creating profile...");
-    try {
-      // Create profile if doesn't exist
-      selfUsername = await ensurePlayerProfile(sess);
-      console.log("[Profile] Username:", selfUsername);
-      
-      // Then refresh to get role and mute status
-      await refreshSelfProfile();
-    } catch (err) {
-      console.error("[Profile] Failed to create profile:", err);
-      setStatus("Profile creation failed: " + err.message);
-      return;
-    }
-    
-    startMobTickerIfAllowed();
-    
-    setStatus("Joining world...");
-    await ensureWorld(); // CRITICAL: Get worldId for multiplayer
-    
-    setStatus("World joined. Generating spawn...");
-    
-    // Force initial chunk generation around spawn FIRST
-    const [spawnCx, spawnCz] = worldToChunk(SPAWN_X, SPAWN_Z);
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dz = -1; dz <= 1; dz++) {
-        buildChunk(spawnCx + dx, spawnCz + dz);
+    if (uid){
+      setStatus("Auth OK. Syncing profile...");
+      try{
+        selfUsername = await ensurePlayerProfile(sess);
+        console.log("[Profile] Username:", selfUsername);
+        await refreshSelfProfile();
+      } catch (err){
+        console.error("[Profile] Profile sync failed (continuing):", err);
+        setStatus("Profile sync delayed (continuing)...");
       }
     }
-    
+
+    startMobTickerIfAllowed();
+
+    setStatus("Joining world...");
+    await ensureWorld();
+
+    setStatus("World joined. Generating spawn...");
+
+    const [spawnCx, spawnCz] = worldToChunk(SPAWN_X, SPAWN_Z);
+    for (let dx=-1; dx<=1; dx++){
+      for (let dz=-1; dz<=1; dz++){
+        buildChunk(spawnCx+dx, spawnCz+dz);
+      }
+    }
+
     console.log(`[Spawn] Chunks built, looking for ground at (${SPAWN_X}, ${SPAWN_Z})`);
-    
+
     // NOW find solid ground by scanning down
-    let sy = 80; // Start high
+    let sy = 80;
     let foundGround = false;
-    
     for (let y = 80; y >= MIN_Y; y--) {
       const code = getBlockCode(SPAWN_X, y, SPAWN_Z);
       if (code && code !== "air" && code !== "water") {
-        sy = y + 2; // Spawn 2 blocks above solid ground
+        sy = y + 2;
         foundGround = true;
         console.log(`[Spawn] Found ground: ${code} at Y=${y}, spawning at Y=${sy}`);
         break;
       }
     }
-    
-    // Fallback if no ground found
     if (!foundGround) {
-      console.warn("[Spawn] No ground found after scanning, using default Y=35");
-      sy = 35;
+      console.warn("[Spawn] No ground found, using default spawn height");
     }
-    
-    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
-    
-    setStatus("Loading...");
+
+    player.pos.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    player.vel.set(0,0,0);
+
     loadCachedEdits(worldId);
-    
-    subscribeRealtime(); // Now worldId is set, multiplayer will work
-    
-    // Load mobs and start AI ticker
-    loadMobs().then(() => {
-      console.log("[Mobs] Loaded and spawned");
-      startMobTickerIfAllowed();
-    }).catch(err => {
-      console.warn("[Mobs] Failed to load:", err.message);
-    });
-    
-    // Load passive animals
-    loadAnimals().then(() => {
-      console.log("[Animals] Loaded and grazing");
-    }).catch(err => {
-      console.warn("[Animals] Failed to load:", err.message);
-    });
-    
-    // PHASE 3: Initialize combat system
-    setupCombat();
-    
-    setHint((isGuest ? "Guest session. " : "") + (isMobile()
-      ? "Left: move • Right: look • Tap: break • Double-tap: place"
-      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
+    subscribeRealtime();
 
-    // Hide auth panel after login, show game
-    const authPanel = document.getElementById("auth");
-    const gameContainer = document.getElementById("game-container");
-    
-    if (authPanel) {
-      authPanel.classList.add('hidden');
-      console.log("[Auth] Auth panel hidden - user logged in");
-    } else {
-      console.error("[Auth] Cannot find auth panel element!");
-    }
-    
-    if (gameContainer) {
-      gameContainer.classList.add('active');
-      console.log("[Auth] Game container visible");
-    } else {
-      console.error("[Auth] Cannot find game container!");
-    }
-    
-    _authInitSucceeded = true;
-    if (chat.root) chat.root.style.display = "";
-    } finally {
-      _authInitInFlight = false;
-      if (_authInitSucceeded) _authInitKeyDone = key;
-    }
-
-  } else {
-    // Not logged in - show auth, hide game
-    clearRealtime();
-    _authInitKeyDone = "";
-    
-    const authPanel = document.getElementById("auth");
-    const gameContainer = document.getElementById("game-container");
-    
-    if (authPanel) authPanel.classList.remove('hidden');
-    if (gameContainer) gameContainer.classList.remove('active');
-    
-    if (chat.root) chat.root.style.display = "none";
-    if (chat.messages) chat.messages.innerHTML = "";
+    hideAuthPanelShowGame(); // ensure UI flips even if profile sync was delayed
+    _authInitKeyDone = key;
+  } finally{
+    _authInitInFlight = false;
   }
+}
+
+// LOGIN FLOW BOOTSTRAP
+// =======================
+supabase.auth.onAuthStateChange(async (_event, sess) => {
+  setSessionUserId(sess);
+  _pendingSession = sess;
+
+  if (!sess?.user?.id){
+    _authInitKeyDone = "";
+    _enterConfirmed = false;
+    showAuthPanelHideGame();
+    return;
+  }
+
+  // If a session already exists (Supabase persists), require an explicit click to enter world.
+  if (!_enterConfirmed){
+    setStatus("Session detected. Click Log In / Enter to continue.");
+    // keep auth panel visible until user confirms
+    showAuthPanelHideGame();
+    return;
+  }
+
+  await initGameForSession(sess);
 });
 
 // =======================
