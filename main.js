@@ -724,18 +724,6 @@ async function loadMaterialsFromDB(){
   console.log("[Materials] Loaded:", MATERIAL_DEFS.length, "blocks,", ORE_CODES.length, "ores");
 }
 
-// Load DB materials exactly once (auth refresh can fire multiple times)
-let _materialsPromise = null;
-function ensureMaterialsLoaded(){
-  if (_materialsPromise) return _materialsPromise;
-  _materialsPromise = (async()=>{
-    await loadMaterialsFromDB();
-    return true;
-  })();
-  return _materialsPromise;
-}
-
-
 
 
 // =======================
@@ -3705,28 +3693,58 @@ window.clearDatabaseBlocks = async function() {
 // =======================
 // LOGIN FLOW BOOTSTRAP
 // =======================
-let _authInitInFlight = false;
-let _authInitKeyDone = ""; // userId|worldSlug
 
+// =======================
+// INIT GUARDS + MATERIALS LOADER (patched)
+// =======================
+let _authInitInFlight = false;
+let _authInitKeyDone = "";
+let _materialsPromise = null;
+
+function ensureMaterialsLoaded() {
+  if (_materialsPromise) return _materialsPromise;
+  _materialsPromise = (async () => {
+    try {
+      await loadMaterialsFromDB();
+    } catch (e) {
+      console.error("[Materials] loadMaterialsFromDB failed:", e);
+      // Keep promise rejected? No: allow retries on next call.
+      _materialsPromise = null;
+      throw e;
+    }
+    return true;
+  })();
+  return _materialsPromise;
+}
 supabase.auth.onAuthStateChange(async (_event, sess) => {
   setSessionUserId(sess);
   isGuest = isAnonymousSession(sess);
+
+  // Always update UI visibility based on auth state, even if we skip heavy init.
+  const authPanel = document.getElementById("auth");
+  const gameContainer = document.getElementById("game-container");
+  if (sess?.user?.id) {
+    if (authPanel) authPanel.classList.add('hidden');
+    if (gameContainer) gameContainer.classList.add('active');
+  } else {
+    if (authPanel) authPanel.classList.remove('hidden');
+    if (gameContainer) gameContainer.classList.remove('active');
+  }
   spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
+  if (sess?.user?.id){
 
-  const uid = sess?.user?.id || "";
-  const slug = (typeof getSelectedWorldSlug === "function") ? getSelectedWorldSlug() : "overworld";
-  const key = `${uid}|${slug}`;
-
-  // Auth refresh can fire multiple times. Don't re-init the world unless user/world changed.
-  if (_authInitKeyDone === key) return;
-  if (_authInitInFlight) return;
-  _authInitInFlight = true;
-
-  try {
-    // Ensure DB materials are loaded before any chunk meshing / edits replay.
-    await ensureMaterialsLoaded();
-
-if (sess?.user?.id){
+    const uid = sess.user.id;
+    const slug = (typeof getSelectedWorldSlug === "function" ? getSelectedWorldSlug() : "overworld");
+    const key = `${uid}|${slug}`;
+    if (_authInitKeyDone === key) {
+      // Already initialized for this user+world; keep UI shown but skip heavy init.
+      return;
+    }
+    if (_authInitInFlight) return;
+    _authInitInFlight = true;
+    let _authInitSucceeded = false;
+    try {
+      await ensureMaterialsLoaded();
     setStatus("Auth OK. Creating profile...");
     try {
       // Create profile if doesn't exist
@@ -3738,9 +3756,8 @@ if (sess?.user?.id){
     } catch (err) {
       console.error("[Profile] Failed to create profile:", err);
       setStatus("Profile creation failed: " + err.message);
-      // continue initialization even if profile upsert fails
+      return;
     }
-
     
     startMobTickerIfAllowed();
     
@@ -3826,12 +3843,17 @@ if (sess?.user?.id){
       console.error("[Auth] Cannot find game container!");
     }
     
+    _authInitSucceeded = true;
     if (chat.root) chat.root.style.display = "";
+    } finally {
+      _authInitInFlight = false;
+      if (_authInitSucceeded) _authInitKeyDone = key;
+    }
 
-    _authInitKeyDone = key;
   } else {
     // Not logged in - show auth, hide game
     clearRealtime();
+    _authInitKeyDone = "";
     
     const authPanel = document.getElementById("auth");
     const gameContainer = document.getElementById("game-container");
@@ -3841,10 +3863,6 @@ if (sess?.user?.id){
     
     if (chat.root) chat.root.style.display = "none";
     if (chat.messages) chat.messages.innerHTML = "";
-  }
-
-  } finally {
-    _authInitInFlight = false;
   }
 });
 
