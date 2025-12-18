@@ -2925,70 +2925,70 @@ function makeBlockFall(world_id, x, y, z, code){
 }
 
 function breakTreeAbove(world_id, x, y, z){
-  // BATCHED tree breaking - collect all blocks first, then break them
+  // Robust tree felling: remove the entire connected tree (logs + leaves)
+  // without leaving the top behind (e.g., when trees are taller than a fixed scan height,
+  // or when canopies cross chunk boundaries).
+  //
+  // Safeguards:
+  // - Bounding box around the starting point so we don't fell neighboring trees.
+  // - Hard cap on total blocks removed.
+  const startX = x, startY = y, startZ = z;
+
+  const MAX_BLOCKS = 4096;     // safety cap
+  const MAX_UP = 40;           // tallest tree we support from startY
+  const MAX_DOWN = 8;          // allow some roots/support blocks below startY
+  const MAX_R = 7;             // horizontal radius around start
+
+  const isTreeBlock = (code) => !!code && TREE_BLOCKS.has(code);
+  const inBounds = (xx, yy, zz) =>
+    Math.abs(xx - startX) <= MAX_R &&
+    Math.abs(zz - startZ) <= MAX_R &&
+    (yy - startY) <= MAX_UP &&
+    (startY - yy) <= MAX_DOWN;
+
+  const seen = new Set();
+  const q = [[startX, startY, startZ]];
   const blocksToBreak = [];
-  
-  // Collect all tree blocks above this point
-  for (let dy = 0; dy < 15; dy++) { // Max tree height ~15
-    const checkY = y + dy;
-    const code = getBlockCode(x, checkY, z);
-    
-    if (!code || code === "air" || code === "__air__") break;
-    if (!TREE_BLOCKS.has(code)) break;
-    
-    // Add this block to break list
-    blocksToBreak.push({ x, y: checkY, z });
-    
-    // Also collect leaves in radius around logs
-    if (code.includes('_log')) {
-      for (let dz = -2; dz <= 2; dz++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          if (dx === 0 && dz === 0) continue;
-          const leafCode = getBlockCode(x+dx, checkY, z+dz);
-          if (leafCode && leafCode.includes('_leaves')) {
-            blocksToBreak.push({ x: x+dx, y: checkY, z: z+dz });
-          }
-        }
-      }
+
+  const key = (xx,yy,zz)=>`${xx},${yy},${zz}`;
+
+  while (q.length && blocksToBreak.length < MAX_BLOCKS){
+    const [xx,yy,zz] = q.pop();
+    if (!inBounds(xx,yy,zz)) continue;
+    const k = key(xx,yy,zz);
+    if (seen.has(k)) continue;
+    seen.add(k);
+
+    const code = getBlockCode(xx,yy,zz);
+    if (!isTreeBlock(code)) continue;
+
+    blocksToBreak.push([xx,yy,zz,code]);
+
+    // 6-neighborhood keeps us connected without jumping too far
+    q.push([xx+1,yy,zz],[xx-1,yy,zz],[xx,yy+1,zz],[xx,yy-1,zz],[xx,yy,zz+1],[xx,yy,zz-1]);
+
+    // Extra canopy connectivity (helps avoid "floating top" across chunk edges)
+    // Only add diagonals when we're in leaves, to reduce risk of felling adjacent trees via trunks.
+    if (code.includes('_leaves')) {
+      q.push(
+        [xx+1,yy,zz+1],[xx+1,yy,zz-1],[xx-1,yy,zz+1],[xx-1,yy,zz-1],
+        [xx+1,yy+1,zz],[xx-1,yy+1,zz],[xx,yy+1,zz+1],[xx,yy+1,zz-1]
+      );
     }
   }
-  
-  // Now break all blocks in batch (non-blocking)
-  if (blocksToBreak.length > 0) {
-    console.log(`[Tree] Breaking ${blocksToBreak.length} blocks`);
-    
-    // Collect affected chunks
-    const affectedChunks = new Set();
-    
-    // Apply all edits (this marks chunks dirty but doesn't rebuild yet)
-    for (const block of blocksToBreak) {
-      const [cx, cz] = worldToChunk(block.x, block.z);
-      affectedChunks.add(chunkKey(cx, cz));
-      
-      // Apply edit without rebuilding
-      const k = chunkKey(cx, cz);
-      const map = worldEdits.get(k) || new Map();
-      worldEdits.set(k, map);
-      map.set(blockKey(block.x, block.y, block.z), "__air__");
-      cacheEdit(world_id, block.x, block.y, block.z, "air");
-    }
-    
-    // Rebuild affected chunks ONCE (not per block!)
-    for (const chunkK of affectedChunks) {
-      const [cx, cz] = chunkK.split(',').map(Number);
-      rebuildChunk(cx, cz);
-    }
-    
-    // Send server updates in background (don't await, don't block)
-    if (!isGuest) {
-      // Break blocks on server asynchronously
-      for (const block of blocksToBreak) {
-        breakBlockServer(world_id, block.x, block.y, block.z).catch(err => {
-          console.warn('[Tree] Server break failed:', err);
-        });
-      }
-    }
+
+  if (!blocksToBreak.length) return;
+
+  // Break from top-down for nicer visuals and to avoid gravity side-effects mid-fell
+  blocksToBreak.sort((a,b)=> b[1]-a[1]);
+
+  for (const [bx, by, bz] of blocksToBreak) {
+    applyEditLocal(world_id, bx, by, bz, "air");
+    if (!isGuest) breakBlockServer(world_id, bx, by, bz);
   }
+
+  // Re-check support around the base to settle anything affected
+  checkGravityAbove(world_id, startX, startY-1, startZ);
 }
 
 function hasLogBelow(x, y, z, maxDepth){
