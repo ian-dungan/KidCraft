@@ -2895,28 +2895,54 @@ function makeBlockFall(world_id, x, y, z, code){
 }
 
 function breakTreeAbove(world_id, x, y, z){
-  // BATCHED tree breaking - collect all blocks first, then break them
+  // FLOOD-FILL tree breaking - finds ALL connected tree blocks (logs AND leaves)
   const blocksToBreak = [];
+  const visited = new Set();
+  const queue = [{x, y, z}];
   
-  // Collect all tree blocks above this point
-  for (let dy = 0; dy < 15; dy++) { // Max tree height ~15
-    const checkY = y + dy;
-    const code = getBlockCode(x, checkY, z);
+  // Flood-fill to find all connected tree blocks
+  while (queue.length > 0 && blocksToBreak.length < 500) { // Safety limit
+    const current = queue.shift();
+    const key = `${current.x},${current.y},${current.z}`;
     
-    if (!code || code === "air" || code === "__air__") break;
-    if (!TREE_BLOCKS.has(code)) break;
+    if (visited.has(key)) continue;
+    visited.add(key);
     
-    // Add this block to break list
-    blocksToBreak.push({ x, y: checkY, z });
+    const code = getBlockCode(current.x, current.y, current.z);
+    if (!code || code === "air" || code === "__air__") continue;
+    if (!TREE_BLOCKS.has(code)) continue;
     
-    // Also collect leaves in radius around logs
+    // Add to break list
+    blocksToBreak.push(current);
+    
+    // Check all 6 adjacent blocks (up, down, north, south, east, west)
+    queue.push({x: current.x, y: current.y + 1, z: current.z}); // up
+    queue.push({x: current.x, y: current.y - 1, z: current.z}); // down
+    queue.push({x: current.x + 1, y: current.y, z: current.z}); // east
+    queue.push({x: current.x - 1, y: current.y, z: current.z}); // west
+    queue.push({x: current.x, y: current.y, z: current.z + 1}); // north
+    queue.push({x: current.x, y: current.y, z: current.z - 1}); // south
+    
+    // For logs, also check diagonal connections (for branches)
     if (code.includes('_log')) {
-      for (let dz = -2; dz <= 2; dz++) {
-        for (let dx = -2; dx <= 2; dx++) {
+      // Check 8 diagonal horizontal neighbors
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
           if (dx === 0 && dz === 0) continue;
-          const leafCode = getBlockCode(x+dx, checkY, z+dz);
-          if (leafCode && leafCode.includes('_leaves')) {
-            blocksToBreak.push({ x: x+dx, y: checkY, z: z+dz });
+          queue.push({x: current.x + dx, y: current.y, z: current.z + dz});
+          queue.push({x: current.x + dx, y: current.y + 1, z: current.z + dz});
+          queue.push({x: current.x + dx, y: current.y - 1, z: current.z + dz});
+        }
+      }
+    }
+    
+    // For leaves, check closer neighbors (leaves connect to each other)
+    if (code.includes('_leaves')) {
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            if (dx === 0 && dy === 0 && dz === 0) continue;
+            queue.push({x: current.x + dx, y: current.y + dy, z: current.z + dz});
           }
         }
       }
@@ -3445,6 +3471,9 @@ async function sendChat(message){
   
   console.log("[Chat] Sending message:", msg);
   
+  // LOCAL ECHO: Show message immediately (optimistic UI)
+  addChatLine(selfUsername || "You", msg, new Date().toISOString());
+  
   // Insert message
   const { data, error } = await supabase.from("chat_messages").insert({
     world_id: worldId,
@@ -3710,6 +3739,13 @@ supabase.auth.onAuthStateChange(async (_event, sess) => {
       console.error("[Profile] Failed to create profile:", err);
       setStatus("Profile creation failed: " + err.message);
       return;
+    }
+    
+    // CRITICAL: Wait for materials to load BEFORE building world
+    if (!MATERIAL_DEFS || MATERIAL_DEFS.length === 0) {
+      setStatus("Loading materials...");
+      await loadMaterialsFromDB();
+      console.log("[Materials] Loaded before world generation");
     }
     
     startMobTickerIfAllowed();
@@ -4517,6 +4553,164 @@ function animate(){
 }
 animate();
 
+// =======================
+// === v62 MOBILE CONTROLS ===
+// =======================
+
+let mobileMode = 'break'; // 'break' or 'place'
+let mobileMaterialSelectorOpen = false;
+
+function setupMobileControls() {
+  const modeToggle = document.getElementById('mobile-mode-toggle');
+  const materialBtn = document.getElementById('mobile-material-btn');
+  const inventoryBtn = document.getElementById('mobile-inventory-btn');
+  const modeIndicator = document.getElementById('mobile-mode-indicator');
+  const materialSelector = document.getElementById('mobile-material-selector');
+  
+  if (!modeToggle || !materialBtn || !inventoryBtn) return;
+  
+  // Mode Toggle (Break/Place)
+  modeToggle.addEventListener('click', () => {
+    mobileMode = mobileMode === 'break' ? 'place' : 'break';
+    updateMobileMode();
+  });
+  
+  // Material Selector Button
+  materialBtn.addEventListener('click', () => {
+    mobileMaterialSelectorOpen = !mobileMaterialSelectorOpen;
+    materialSelector.style.display = mobileMaterialSelectorOpen ? 'block' : 'none';
+    
+    if (mobileMaterialSelectorOpen) {
+      populateMaterialSelector();
+    }
+  });
+  
+  // Inventory Button
+  inventoryBtn.addEventListener('click', () => {
+    toggleInventoryPanel();
+  });
+  
+  // Update mode indicator
+  updateMobileMode();
+  
+  console.log('[Mobile] Controls initialized');
+}
+
+function updateMobileMode() {
+  const modeIndicator = document.getElementById('mobile-mode-indicator');
+  const modeToggle = document.getElementById('mobile-mode-toggle');
+  
+  if (!modeIndicator || !modeToggle) return;
+  
+  if (mobileMode === 'break') {
+    modeIndicator.textContent = 'BREAK';
+    modeIndicator.className = 'mode-break';
+    modeToggle.textContent = '🔨';
+  } else {
+    modeIndicator.textContent = 'PLACE';
+    modeIndicator.className = 'mode-place';
+    modeToggle.textContent = '🧱';
+  }
+}
+
+function populateMaterialSelector() {
+  const materialSelector = document.getElementById('mobile-material-selector');
+  if (!materialSelector) return;
+  
+  materialSelector.innerHTML = '';
+  
+  // Get hotbar materials
+  const slots = document.querySelectorAll('#hotbar .slot');
+  
+  slots.forEach((slot, index) => {
+    const code = slot.dataset.code;
+    const name = slot.dataset.name || code;
+    
+    if (!code) return;
+    
+    const option = document.createElement('div');
+    option.className = 'material-option';
+    if (index === selectedSlotIndex) {
+      option.classList.add('selected');
+    }
+    option.textContent = name;
+    
+    option.addEventListener('click', () => {
+      selectedSlotIndex = index;
+      updateHotbar();
+      populateMaterialSelector(); // Refresh to show selection
+    });
+    
+    materialSelector.appendChild(option);
+  });
+}
+
+// Override mobile touch behavior for break/place
+function handleMobileTap() {
+  if (!isMobile()) return;
+  
+  if (mobileMode === 'break') {
+    // Break block
+    const hit = raycastBlock();
+    if (!hit) return;
+    
+    const userData = hit.object.userData || {};
+    const x = userData.x;
+    const y = userData.y;
+    const z = userData.z;
+    
+    if (x === undefined || y === undefined || z === undefined) return;
+    if (y <= MIN_Y) { setHint("Too deep - unbreakable layer."); return; }
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
+    
+    applyEditLocal(worldId, x,y,z, "air");
+    bumpShake(0.10);
+    playSfx("break");
+    if (worldId && userId()) breakBlockServer(worldId, x,y,z);
+    
+  } else {
+    // Place block
+    const hit = raycastBlock();
+    if (!hit) return;
+    
+    const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
+    const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+    
+    // Get selected block from hotbar
+    const slots = document.querySelectorAll('#hotbar .slot');
+    const code = slots[selectedSlotIndex]?.dataset.code || 'stone';
+    
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
+    
+    applyEditLocal(worldId, x,y,z, code);
+    bumpShake(0.08);
+    playSfx("place");
+    if (worldId && userId()) placeBlockServer(worldId, x,y,z, code);
+  }
+}
+
+// Initialize mobile controls when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setupMobileControls);
+} else {
+  setupMobileControls();
+}
+
+// Add mobile tap handler to touch zones
+function addMobileTapHandlers() {
+  const touchRight = document.getElementById('touch-right');
+  if (touchRight) {
+    touchRight.addEventListener('click', handleMobileTap);
+    touchRight.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      handleMobileTap();
+    });
+  }
+}
+
+// Call after a short delay to ensure DOM is ready
+setTimeout(addMobileTapHandlers, 1000);
+
 addEventListener("resize", ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
@@ -5213,3 +5407,163 @@ console.log("[Debug] Try: DEBUG.whereAmI() - Check your position");
 console.log("[Debug] Try: DEBUG.testNoise() - Test noise function");
 console.log("[Debug] Try: DEBUG.testTerrain(x, z) - Check terrain");
 console.log("[Debug] Try: DEBUG.testArea() - View 5x5 height map");
+
+// =======================
+// === V62: MOBILE CONTROLS ===
+// =======================
+
+let mobileMode = 'destroy'; // 'build' or 'destroy'
+let selectedSlotIndex = 0;
+
+// Mode toggle button
+const mobileModeBtn = document.getElementById('mobile-mode-btn');
+const mobileModeIcon = document.getElementById('mobile-mode-icon');
+const modeIndicator = document.getElementById('mode-indicator');
+
+if (mobileModeBtn) {
+  mobileModeBtn.addEventListener('click', () => {
+    mobileMode = mobileMode === 'destroy' ? 'build' : 'destroy';
+    updateMobileMode();
+  });
+}
+
+function updateMobileMode() {
+  if (!mobileModeBtn) return;
+  
+  if (mobileMode === 'build') {
+    mobileModeBtn.classList.remove('destroy');
+    mobileModeBtn.classList.add('build');
+    mobileModeIcon.textContent = '🧱';
+    showModeIndicator('BUILD MODE');
+  } else {
+    mobileModeBtn.classList.remove('build');
+    mobileModeBtn.classList.add('destroy');
+    mobileModeIcon.textContent = '🔨';
+    showModeIndicator('BREAK MODE');
+  }
+}
+
+function showModeIndicator(text) {
+  if (!modeIndicator) return;
+  
+  modeIndicator.textContent = text;
+  modeIndicator.className = 'visible ' + mobileMode;
+  
+  setTimeout(() => {
+    modeIndicator.classList.remove('visible');
+  }, 1500);
+}
+
+// Hotbar navigation
+const mobilePrevBtn = document.getElementById('mobile-prev-slot');
+const mobileNextBtn = document.getElementById('mobile-next-slot');
+
+if (mobilePrevBtn) {
+  mobilePrevBtn.addEventListener('click', () => {
+    selectedSlotIndex = (selectedSlotIndex - 1 + 9) % 9;
+    updateSelectedSlot();
+  });
+}
+
+if (mobileNextBtn) {
+  mobileNextBtn.addEventListener('click', () => {
+    selectedSlotIndex = (selectedSlotIndex + 1) % 9;
+    updateSelectedSlot();
+  });
+}
+
+function updateSelectedSlot() {
+  // Update hotbar visual
+  const slots = document.querySelectorAll('#hotbar .slot');
+  slots.forEach((slot, i) => {
+    if (i === selectedSlotIndex) {
+      slot.classList.add('active', 'hotbar-highlight');
+      setTimeout(() => slot.classList.remove('hotbar-highlight'), 300);
+    } else {
+      slot.classList.remove('active');
+    }
+  });
+  
+  // Update hint to show selected material
+  const selectedSlot = slots[selectedSlotIndex];
+  if (selectedSlot) {
+    const code = selectedSlot.dataset.code || 'unknown';
+    setHint(`Selected: ${code}`);
+  }
+}
+
+// Mobile tap handling - override the touch zone behavior
+if (isMobile()) {
+  const touchRight = document.getElementById('touch-right');
+  if (touchRight) {
+    // Remove old listeners (if any)
+    const newTouchRight = touchRight.cloneNode(true);
+    touchRight.parentNode.replaceChild(newTouchRight, touchRight);
+    
+    // Add new tap handler for build/break
+    newTouchRight.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      handleMobileTap();
+    });
+  }
+}
+
+async function handleMobileTap() {
+  if (!controls || !controls.isLocked) return;
+  
+  if (mobileMode === 'destroy') {
+    // Break block
+    const hit = raycastBlock();
+    if (!hit) return;
+    
+    if (hit.object.userData && hit.object.userData.kind === 'decor') return;
+    
+    const userData = hit.object.userData || {};
+    const x = userData.x;
+    const y = userData.y;
+    const z = userData.z;
+    
+    if (x === undefined || y === undefined || z === undefined) return;
+    if (y <= MIN_Y) { setHint("Too deep - unbreakable layer."); return; }
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
+    
+    applyEditLocal(worldId, x,y,z, "air");
+    bumpShake(0.10);
+    playSfx("break");
+    if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
+    
+  } else {
+    // Place block
+    const hit = raycastBlock();
+    if (!hit) return;
+    
+    const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
+    const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+    
+    // Get selected block from hotbar
+    const slots = document.querySelectorAll('#hotbar .slot');
+    const code = slots[selectedSlotIndex]?.dataset.code || 'stone';
+    
+    if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
+    
+    applyEditLocal(worldId, x,y,z, code);
+    bumpShake(0.08);
+    playSfx("place");
+    if (worldId && userId()) await placeBlockServer(worldId, x,y,z, code);
+  }
+}
+
+// Inventory button
+const mobileInvBtn = document.getElementById('mobile-inventory-btn');
+if (mobileInvBtn) {
+  mobileInvBtn.addEventListener('click', () => {
+    toggleInventoryPanel();
+  });
+}
+
+// Initialize mobile mode
+if (isMobile()) {
+  updateMobileMode();
+}
+
+console.log("[Mobile] Controls initialized");
