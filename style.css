@@ -767,3 +767,83 @@ canvas { display:block; }
   color: #51cf66;
   border-color: #51cf66 !important;
 }
+
+/* =======================
+   PHASE 4: HUNGER & FARMING
+   ======================= */
+
+/* Hunger Bar (Drumsticks Display) */
+#hunger-bar {
+  position: absolute;
+  top: 100px; /* Below health bar */
+  left: 10px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+#hunger-drumsticks {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-width: 300px;
+}
+
+.drumstick {
+  width: 32px;
+  height: 32px;
+  background: rgba(0,0,0,0.5);
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 4px;
+  position: relative;
+  display: inline-block;
+}
+
+.drumstick::before {
+  content: '🍗';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+  filter: grayscale(100%);
+}
+
+.drumstick.full::before {
+  filter: grayscale(0%) brightness(1.2);
+}
+
+.drumstick.half::before {
+  filter: grayscale(0%) brightness(1.2);
+  background: linear-gradient(to right, transparent 50%, rgba(0,0,0,0.7) 50%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* Floating hearts animation */
+@keyframes floatUp {
+  0% {
+    transform: translate(-50%, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -100px) scale(1.5);
+    opacity: 0;
+  }
+}
+
+/* Crop growth stages (visual feedback) */
+.crop-stage-0 {
+  filter: brightness(0.4); /* Just planted */
+}
+
+.crop-stage-1 {
+  filter: brightness(0.6); /* Growing */
+}
+
+.crop-stage-2 {
+  filter: brightness(0.8); /* Almost ready */
+}
+
+.crop-stage-3 {
+  filter: brightness(1.2); /* Fully grown (brighter) */
+}

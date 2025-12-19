@@ -45,6 +45,63 @@ const mobStates = new Map(); // mobId -> { lastAttack, target, wanderDir, lastWa
 // Death state
 let deathScreenShown = false;
 
+// =======================
+// === PHASE 4: FOOD, FARMING & HEALING ===
+// =======================
+
+// Hunger system (20 = 10 drumsticks)
+let playerHunger = 20;
+let playerMaxHunger = 20;
+let lastHungerLoss = 0;
+const HUNGER_LOSS_INTERVAL = 30000; // Lose 1 hunger every 30 seconds
+const HUNGER_DAMAGE_INTERVAL = 4000; // Starving: 1 damage every 4 seconds
+let lastStarvationDamage = 0;
+
+// Health regeneration
+let lastHealthRegen = 0;
+const HEALTH_REGEN_INTERVAL = 4000; // Heal 1 HP every 4 seconds when full hunger
+
+// Food values (hunger restored)
+const FOOD_VALUES = {
+  // Raw foods
+  'apple': 4,
+  'carrot': 3,
+  'potato': 1,
+  'wheat': 1,
+  
+  // Cooked foods
+  'bread': 5,
+  'cooked_beef': 8,
+  'cooked_porkchop': 8,
+  'cooked_chicken': 6,
+  'baked_potato': 5,
+  
+  // Raw meats (less effective)
+  'raw_beef': 3,
+  'raw_porkchop': 3,
+  'raw_chicken': 2
+};
+
+// Crop growth system
+const CROP_STAGES = 4; // 0-3 (0=planted, 3=fully grown)
+const CROP_GROWTH_INTERVAL = 60000; // 1 minute per stage
+let lastCropGrowthTick = 0;
+
+// Crop definitions
+const CROP_TYPES = {
+  'wheat_seeds': { crop: 'wheat_crop', harvest: 'wheat', stages: 4 },
+  'carrot': { crop: 'carrot_crop', harvest: 'carrot', stages: 4 },
+  'potato': { crop: 'potato_crop', harvest: 'potato', stages: 4 }
+};
+
+// Animal breeding
+const animalBreedingCooldowns = new Map(); // mobId -> timestamp
+const BREEDING_COOLDOWN = 300000; // 5 minutes between breeding
+const BABY_GROW_TIME = 120000; // 2 minutes for baby to grow up
+
+// Track planted crops
+const worldCrops = new Map(); // "x,y,z" -> { type, stage, plantedAt }
+
 
 // =======================
 // === SUPABASE PERSISTENCE (inventory/world/furnace) ===
@@ -3063,10 +3120,23 @@ function userId(){ return sessionUserId; }
 window.addEventListener("contextmenu", e=>e.preventDefault());
 window.addEventListener("mousedown", async (e)=>{
   if (isMobile()) return;
-  if (e.button === 0){ // break / attack
-    // PHASE 3: Check for mob first
+  if (e.button === 0){ // break / attack / harvest / feed
+    const selectedCode = getSelectedBlockCode();
+    
+    // PHASE 4: Check if holding wheat and clicking animal (feed/breed)
+    if (selectedCode === 'wheat') {
+      const mob = raycastMob();
+      if (mob && PASSIVE_MOBS.has(mob.userData.mobType)) {
+        if (feedAnimal(mob, 'wheat')) {
+          swingHotbar();
+        }
+        return;
+      }
+    }
+    
+    // PHASE 3: Check for mob attack
     const mob = raycastMob();
-    if (mob) {
+    if (mob && !PASSIVE_MOBS.has(mob.userData.mobType)) {
       attackMob(mob);
       return;
     }
@@ -3092,18 +3162,51 @@ window.addEventListener("mousedown", async (e)=>{
       return;
     }
     
+    // PHASE 4: Check if crop block (harvest it)
+    const blockCode = getBlockCode(x, y, z);
+    if (blockCode && blockCode.includes('_crop')) {
+      if (harvestCrop(x, y, z)) {
+        swingHotbar();
+      }
+      return;
+    }
+    
     if (y <= MIN_Y) { setHint("Too deep - unbreakable layer."); return; }
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, "air");
     bumpShake(0.10);
     playSfx("break");
     if (worldId && userId()) await breakBlockServer(worldId, x,y,z);
-  } else if (e.button === 2){ // place
+  } else if (e.button === 2){ // place / eat / plant
+    const code = getSelectedBlockCode();
+    
+    // PHASE 4: Check if food item (eat it)
+    if (FOOD_VALUES[code]) {
+      if (eatFood(code)) {
+        swingHotbar();
+      }
+      return;
+    }
+    
+    // PHASE 4: Check if seeds (plant crop)
+    if (CROP_TYPES[code]) {
+      const hit = raycastBlock();
+      if (!hit) return;
+      const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
+      const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+      
+      if (plantCrop(x, y, z, code)) {
+        swingHotbar();
+        playSfx("place");
+      }
+      return;
+    }
+    
+    // Regular block placement
     const hit = raycastBlock();
     if (!hit) return;
     const p = hit.point.clone().add(hit.face.normal.multiplyScalar(0.51));
     const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-    const code = getSelectedBlockCode();
     if (inSpawnProtection(x,z)) { setHint("Spawn protected."); return; }
     applyEditLocal(worldId, x,y,z, code);
     bumpShake(0.08);
@@ -3982,6 +4085,350 @@ function updateHealthUI() {
   }
 }
 
+// =======================
+// === PHASE 4: HUNGER SYSTEM ===
+// =======================
+
+// Initialize hunger UI
+function initHungerUI() {
+  const hungerContainer = document.getElementById('hunger-drumsticks');
+  if (!hungerContainer) return;
+  
+  hungerContainer.innerHTML = '';
+  const numDrumsticks = playerMaxHunger / 2; // 20 hunger = 10 drumsticks
+  
+  for (let i = 0; i < numDrumsticks; i++) {
+    const drumstick = document.createElement('div');
+    drumstick.className = 'drumstick';
+    drumstick.id = `drumstick-${i}`;
+    hungerContainer.appendChild(drumstick);
+  }
+  
+  updateHungerUI();
+}
+
+// Update hunger display
+function updateHungerUI() {
+  const numDrumsticks = playerMaxHunger / 2;
+  
+  for (let i = 0; i < numDrumsticks; i++) {
+    const drumstick = document.getElementById(`drumstick-${i}`);
+    if (!drumstick) continue;
+    
+    const drumstickValue = i * 2; // Each drumstick = 2 hunger
+    
+    if (playerHunger >= drumstickValue + 2) {
+      drumstick.className = 'drumstick full';
+    } else if (playerHunger >= drumstickValue + 1) {
+      drumstick.className = 'drumstick half';
+    } else {
+      drumstick.className = 'drumstick';
+    }
+  }
+}
+
+// Eat food
+function eatFood(foodCode) {
+  const hungerRestored = FOOD_VALUES[foodCode];
+  if (!hungerRestored) {
+    console.warn(`[Food] Unknown food: ${foodCode}`);
+    return false;
+  }
+  
+  // Can't eat if hunger is full
+  if (playerHunger >= playerMaxHunger) {
+    setHint("You're not hungry!");
+    return false;
+  }
+  
+  // Restore hunger
+  playerHunger = Math.min(playerMaxHunger, playerHunger + hungerRestored);
+  updateHungerUI();
+  
+  console.log(`[Food] Ate ${foodCode}, restored ${hungerRestored} hunger. Now: ${playerHunger}/${playerMaxHunger}`);
+  
+  // Play eating sound
+  playSfx('place', 0.3);
+  
+  // Remove from inventory
+  invAdd(foodCode, -1);
+  updateHotbar();
+  
+  setHint(`+${hungerRestored} hunger`);
+  
+  return true;
+}
+
+// Hunger depletion over time
+function updateHunger() {
+  if (playerDead) return;
+  
+  const now = performance.now();
+  
+  // Lose hunger over time
+  if (now - lastHungerLoss > HUNGER_LOSS_INTERVAL) {
+    lastHungerLoss = now;
+    
+    if (playerHunger > 0) {
+      playerHunger = Math.max(0, playerHunger - 1);
+      updateHungerUI();
+      
+      if (playerHunger === 0) {
+        console.log('[Food] Starving!');
+      }
+    }
+  }
+  
+  // Starving damage
+  if (playerHunger === 0 && now - lastStarvationDamage > HUNGER_DAMAGE_INTERVAL) {
+    lastStarvationDamage = now;
+    damagePlayer(1);
+    setHint('You are starving!');
+    console.log('[Food] Starvation damage');
+  }
+  
+  // Health regeneration from full hunger
+  if (playerHunger >= 18 && playerHealth < playerMaxHealth) {
+    if (now - lastHealthRegen > HEALTH_REGEN_INTERVAL) {
+      lastHealthRegen = now;
+      playerHealth = Math.min(playerMaxHealth, playerHealth + 1);
+      updateHealthUI();
+      console.log('[Food] Regenerated 1 HP from full hunger');
+    }
+  }
+}
+
+// =======================
+// === PHASE 4: FARMING SYSTEM ===
+// =======================
+
+// Plant crop
+function plantCrop(x, y, z, seedCode) {
+  const cropDef = CROP_TYPES[seedCode];
+  if (!cropDef) {
+    console.warn(`[Farm] Unknown seed: ${seedCode}`);
+    return false;
+  }
+  
+  // Check if soil below
+  const soilCode = getBlockCode(x, y - 1, z);
+  if (soilCode !== 'dirt' && soilCode !== 'grass_block' && soilCode !== 'farmland') {
+    setHint('Need dirt or farmland to plant!');
+    return false;
+  }
+  
+  // Plant crop at stage 0
+  const key = `${x},${y},${z}`;
+  worldCrops.set(key, {
+    type: seedCode,
+    stage: 0,
+    plantedAt: Date.now()
+  });
+  
+  // Place crop block
+  applyEditLocal(worldId, x, y, z, cropDef.crop + '_0');
+  
+  // Remove seed from inventory
+  invAdd(seedCode, -1);
+  updateHotbar();
+  
+  console.log(`[Farm] Planted ${seedCode} at (${x},${y},${z})`);
+  return true;
+}
+
+// Grow crops over time
+function updateCropGrowth() {
+  const now = Date.now();
+  
+  if (now - lastCropGrowthTick < CROP_GROWTH_INTERVAL) return;
+  lastCropGrowthTick = now;
+  
+  // Check all crops for growth
+  for (const [key, crop] of worldCrops.entries()) {
+    if (crop.stage >= CROP_STAGES - 1) continue; // Already fully grown
+    
+    const timeSincePlant = now - crop.plantedAt;
+    const expectedStage = Math.min(CROP_STAGES - 1, Math.floor(timeSincePlant / CROP_GROWTH_INTERVAL));
+    
+    if (expectedStage > crop.stage) {
+      // Grow to next stage
+      crop.stage = expectedStage;
+      
+      const [x, y, z] = key.split(',').map(Number);
+      const cropDef = CROP_TYPES[crop.type];
+      
+      // Update block
+      const newCode = cropDef.crop + '_' + crop.stage;
+      applyEditLocal(worldId, x, y, z, newCode);
+      
+      console.log(`[Farm] Crop at (${x},${y},${z}) grew to stage ${crop.stage}`);
+    }
+  }
+}
+
+// Harvest crop
+function harvestCrop(x, y, z) {
+  const key = `${x},${y},${z}`;
+  const crop = worldCrops.get(key);
+  
+  if (!crop) return false;
+  
+  const cropDef = CROP_TYPES[crop.type];
+  if (!cropDef) return false;
+  
+  // Check if fully grown
+  if (crop.stage < CROP_STAGES - 1) {
+    setHint('Crop not ready yet!');
+    return false;
+  }
+  
+  // Harvest!
+  const harvestItem = cropDef.harvest;
+  const harvestAmount = 1 + Math.floor(Math.random() * 3); // 1-3 items
+  
+  invAdd(harvestItem, harvestAmount);
+  updateHotbar();
+  
+  // Remove crop
+  worldCrops.delete(key);
+  applyEditLocal(worldId, x, y, z, 'air');
+  
+  console.log(`[Farm] Harvested ${harvestAmount}x ${harvestItem}`);
+  setHint(`+${harvestAmount} ${harvestItem}`);
+  
+  playSfx('break', 0.5);
+  
+  return true;
+}
+
+// =======================
+// === PHASE 4: ANIMAL BREEDING ===
+// =======================
+
+// Feed animal (breeding)
+function feedAnimal(mobMesh, foodCode) {
+  if (foodCode !== 'wheat') {
+    setHint('Animals only eat wheat!');
+    return false;
+  }
+  
+  const mobId = mobMesh.userData.mobId;
+  const mobType = mobMesh.userData.mobType;
+  
+  // Check if passive animal
+  if (!PASSIVE_MOBS.has(mobType)) {
+    setHint('This creature cannot be fed!');
+    return false;
+  }
+  
+  // Check breeding cooldown
+  const now = Date.now();
+  const lastBreed = animalBreedingCooldowns.get(mobId) || 0;
+  
+  if (now - lastBreed < BREEDING_COOLDOWN) {
+    const remaining = Math.ceil((BREEDING_COOLDOWN - (now - lastBreed)) / 1000);
+    setHint(`Wait ${remaining}s before breeding again`);
+    return false;
+  }
+  
+  // Remove wheat from inventory
+  invAdd('wheat', -1);
+  updateHotbar();
+  
+  // Show hearts effect
+  showHeartsEffect(mobMesh.position);
+  
+  // Set breeding cooldown
+  animalBreedingCooldowns.set(mobId, now);
+  
+  // Find nearby animal of same type
+  const nearbyMate = findNearbyMate(mobMesh, mobType);
+  
+  if (nearbyMate) {
+    // Spawn baby!
+    spawnBabyAnimal(mobMesh.position, mobType);
+    setHint(`Baby ${mobType} born!`);
+    console.log(`[Breeding] ${mobType} bred successfully`);
+  } else {
+    setHint(`${mobType} is ready to breed! Find another nearby.`);
+  }
+  
+  return true;
+}
+
+// Find nearby mate
+function findNearbyMate(mobMesh, mobType) {
+  const pos = mobMesh.position;
+  const MATE_RANGE = 10; // blocks
+  
+  let nearestMate = null;
+  let nearestDist = MATE_RANGE;
+  
+  scene.traverse((obj) => {
+    if (!obj.userData || !obj.userData.mobId) return;
+    if (obj === mobMesh) return; // Skip self
+    if (obj.userData.mobType !== mobType) return; // Different species
+    
+    const dist = pos.distanceTo(obj.position);
+    if (dist < nearestDist) {
+      // Check if not on cooldown
+      const now = Date.now();
+      const lastBreed = animalBreedingCooldowns.get(obj.userData.mobId) || 0;
+      
+      if (now - lastBreed >= BREEDING_COOLDOWN) {
+        nearestMate = obj;
+        nearestDist = dist;
+      }
+    }
+  });
+  
+  return nearestMate;
+}
+
+// Spawn baby animal
+function spawnBabyAnimal(position, type) {
+  const baby = createAnimalMesh(type);
+  baby.scale.set(0.5, 0.5, 0.5); // Half size for baby
+  
+  baby.userData = {
+    mobId: 'baby_' + Date.now(),
+    mobType: type,
+    hp: 5,
+    isBaby: true,
+    bornAt: Date.now()
+  };
+  
+  baby.position.copy(position);
+  baby.position.y = groundHeightAt(position.x, position.z) + 0.5;
+  
+  scene.add(baby);
+  
+  // Baby grows up after time
+  setTimeout(() => {
+    baby.scale.set(1, 1, 1);
+    baby.userData.isBaby = false;
+    console.log(`[Breeding] Baby ${type} grew up!`);
+  }, BABY_GROW_TIME);
+}
+
+// Show hearts particle effect
+function showHeartsEffect(position) {
+  // Simple heart emoji floating up
+  const heart = document.createElement('div');
+  heart.style.position = 'fixed';
+  heart.style.left = '50%';
+  heart.style.top = '50%';
+  heart.style.fontSize = '32px';
+  heart.style.zIndex = '10000';
+  heart.style.pointerEvents = 'none';
+  heart.textContent = '❤️';
+  heart.style.animation = 'floatUp 1s ease-out';
+  
+  document.body.appendChild(heart);
+  
+  setTimeout(() => heart.remove(), 1000);
+}
+
 // Damage player
 function damagePlayer(amount) {
   if (playerDead) return;
@@ -4304,10 +4751,20 @@ function setupCombat() {
   initHealthUI();
   setupRespawnButton();
   
+  // PHASE 4: Hunger UI
+  initHungerUI();
+  
   // Mob AI ticker (runs every 50ms)
   setInterval(updateMobAI, 50);
   
+  // PHASE 4: Hunger & crop growth ticker (runs every second)
+  setInterval(() => {
+    updateHunger();
+    updateCropGrowth();
+  }, 1000);
+  
   console.log('[Combat] Phase 3 combat system initialized');
+  console.log('[Food] Phase 4 food & farming system initialized');
 }
 
 function animate(){
