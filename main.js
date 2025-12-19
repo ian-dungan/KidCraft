@@ -468,8 +468,6 @@ ui.signup.onclick = async () => {
 };
 
 ui.login.onclick = async () => {
-  _enterConfirmed = true;
-
   const raw = ui.username?.value || "";
   const u = normalizeUsername(raw);
   const p = ui.password?.value || "";
@@ -537,24 +535,6 @@ function initializeNoise(seed) {
   // Create noise with seeded RNG
   noise2D = createNoise2D(alea);
   console.log("[Noise] Noise function initialized with seed");
-}
-
-function hideAuthPanelShowGame(){
-  try{
-    const authPanel = document.getElementById("authPanel");
-    const gameContainer = document.getElementById("gameContainer");
-    if (authPanel) authPanel.classList.add("hidden");
-    if (gameContainer) gameContainer.classList.remove("hidden");
-    console.log("[Auth] Auth panel hidden - user logged in");
-  } catch(e){ console.warn("[Auth] UI toggle failed:", e); }
-}
-function showAuthPanelHideGame(){
-  try{
-    const authPanel = document.getElementById("authPanel");
-    const gameContainer = document.getElementById("gameContainer");
-    if (authPanel) authPanel.classList.remove("hidden");
-    if (gameContainer) gameContainer.classList.add("hidden");
-  } catch(e){}
 }
 
 // Simple voxel data: chunk key -> Map("x,y,z" => blockCode)
@@ -662,15 +642,6 @@ let ORE_CODES = [];              // codes tagged 'ore'
 let COMMON_BLOCKS = [];          // curated list for hotbar
 let MATERIALS_READY = false;
 
-let _materialsPromise = null;
-function ensureMaterialsLoaded(){
-  if (MATERIALS_READY) return Promise.resolve(true);
-  if (_materialsPromise) return _materialsPromise;
-  _materialsPromise = (async ()=>{ await loadMaterialsFromDB(); return true; })();
-  return _materialsPromise;
-}
-
-
 function hashColor(str){
   // Deterministic color without external libs (no colorsys dependency)
   const s = String(str ?? "");
@@ -733,11 +704,11 @@ function pickCommonHotbar(materials){
 async function loadMaterialsFromDB(){
   const { data, error } = await supabase
     .from("materials")
-    .select("id, code, display_name, category, tags, hardness, props")
+    .select("code, display_name, category, tags, hardness, props")
     .eq("category","block")
     .limit(5000);
   if (error) { console.warn("[Materials] load failed:", error.message); return; }
-  MATERIAL_DEFS.splice(0, MATERIAL_DEFS.length, ...((data || []).filter(m=>m.code && m.code !== "air")));
+  MATERIAL_DEFS = (data || []).filter(m=>m.code && m.code !== "air");
   ORE_CODES = MATERIAL_DEFS.filter(m=>m.tags?.includes("ore")).map(m=>m.code);
   COMMON_BLOCKS = pickCommonHotbar(MATERIAL_DEFS);
   // If we found a decent set, replace BLOCKS used by hotbar/material palette.
@@ -2837,7 +2808,6 @@ const GRAVITY_BLOCKS = new Set([
 ]);
 
 // Blocks that need a log below (tree leaves and logs)
-const TREE_FELLING_ENABLED = false; // set true if you want whole-tree removal/decay
 const TREE_BLOCKS = new Set([
   'oak_leaves', 'spruce_leaves', 'birch_leaves', 'jungle_leaves',
   'acacia_leaves', 'dark_oak_leaves', 'mangrove_leaves', 'cherry_leaves',
@@ -2858,7 +2828,7 @@ function checkGravityAbove(world_id, x, y, z){
   }
   
   // CASE 2: Tree blocks - check if trunk is broken
-  if (TREE_FELLING_ENABLED && TREE_BLOCKS.has(aboveCode)) {
+  if (TREE_BLOCKS.has(aboveCode)) {
     // If a log is broken, break all leaves and logs above it
     if (aboveCode.includes('_log')) {
       breakTreeAbove(world_id, x, y+1, z);
@@ -2924,87 +2894,72 @@ function makeBlockFall(world_id, x, y, z, code){
   }
 }
 
-
 function breakTreeAbove(world_id, x, y, z){
-  // Connected flood-fill tree felling: removes the entire connected tree (logs + leaves),
-  // even across chunk boundaries, without leaving a floating "top cap".
-  const startCode = getBlockCode(x, y, z);
-  if (!startCode || startCode === "air" || startCode === "__air__") return;
-  if (!TREE_BLOCKS.has(startCode)) return;
-
-  const MAX_BLOCKS = 4096; // safety cap
-  const q = [{x, y, z}];
-  const seen = new Set();
+  // BATCHED tree breaking - collect all blocks first, then break them
   const blocksToBreak = [];
-
-  const keyOf = (bx, by, bz) => `${bx},${by},${bz}`;
-
-  while (q.length) {
-    const b = q.pop();
-    const k = keyOf(b.x, b.y, b.z);
-    if (seen.has(k)) continue;
-    seen.add(k);
-
-    const code = getBlockCode(b.x, b.y, b.z);
-    if (!code || code === "air" || code === "__air__") continue;
-    if (!TREE_BLOCKS.has(code)) continue;
-
-    blocksToBreak.push({x: b.x, y: b.y, z: b.z});
-    if (blocksToBreak.length >= MAX_BLOCKS) break;
-
-    // 6-neighbor connectivity
-    q.push({x:b.x+1,y:b.y,z:b.z});
-    q.push({x:b.x-1,y:b.y,z:b.z});
-    q.push({x:b.x,y:b.y+1,z:b.z});
-    q.push({x:b.x,y:b.y-1,z:b.z});
-    q.push({x:b.x,y:b.y,z:b.z+1});
-    q.push({x:b.x,y:b.y,z:b.z-1});
-
-    // Canopy tends to be diagonal; allow a small horizontal neighborhood at same Y for leaves.
-    if (code.includes('_log') || code.includes('_leaves')) {
-      for (let dx=-1; dx<=1; dx++){
-        for (let dz=-1; dz<=1; dz++){
-          if (dx===0 && dz===0) continue;
-          q.push({x:b.x+dx, y:b.y, z:b.z+dz});
+  
+  // Collect all tree blocks above this point
+  for (let dy = 0; dy < 15; dy++) { // Max tree height ~15
+    const checkY = y + dy;
+    const code = getBlockCode(x, checkY, z);
+    
+    if (!code || code === "air" || code === "__air__") break;
+    if (!TREE_BLOCKS.has(code)) break;
+    
+    // Add this block to break list
+    blocksToBreak.push({ x, y: checkY, z });
+    
+    // Also collect leaves in radius around logs
+    if (code.includes('_log')) {
+      for (let dz = -2; dz <= 2; dz++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          const leafCode = getBlockCode(x+dx, checkY, z+dz);
+          if (leafCode && leafCode.includes('_leaves')) {
+            blocksToBreak.push({ x: x+dx, y: checkY, z: z+dz });
+          }
         }
       }
     }
   }
-
-  if (blocksToBreak.length === 0) return;
-
-  console.log(`[Tree] Breaking ${blocksToBreak.length} blocks (flood-fill)`);
-
-  const affectedChunks = new Set();
-
-  // Apply edits (mark chunks dirty) without rebuilding per-block
-  for (const block of blocksToBreak) {
-    const [cx, cz] = worldToChunk(block.x, block.z);
-    affectedChunks.add(chunkKey(cx, cz));
-
-    const ck = chunkKey(cx, cz);
-    const map = worldEdits.get(ck) || new Map();
-    worldEdits.set(ck, map);
-    map.set(blockKey(block.x, block.y, block.z), "__air__");
-    cacheEdit(world_id, block.x, block.y, block.z, "air");
-  }
-
-  // Rebuild affected chunks once
-  for (const ck of affectedChunks) {
-    const [cx, cz] = ck.split(',').map(Number);
-    rebuildChunk(cx, cz);
-  }
-
-  // Server updates in background
-  if (!isGuest) {
+  
+  // Now break all blocks in batch (non-blocking)
+  if (blocksToBreak.length > 0) {
+    console.log(`[Tree] Breaking ${blocksToBreak.length} blocks`);
+    
+    // Collect affected chunks
+    const affectedChunks = new Set();
+    
+    // Apply all edits (this marks chunks dirty but doesn't rebuild yet)
     for (const block of blocksToBreak) {
-      breakBlockServer(world_id, block.x, block.y, block.z).catch(err => {
-        console.warn('[Tree] Server break failed:', err);
-      });
+      const [cx, cz] = worldToChunk(block.x, block.z);
+      affectedChunks.add(chunkKey(cx, cz));
+      
+      // Apply edit without rebuilding
+      const k = chunkKey(cx, cz);
+      const map = worldEdits.get(k) || new Map();
+      worldEdits.set(k, map);
+      map.set(blockKey(block.x, block.y, block.z), "__air__");
+      cacheEdit(world_id, block.x, block.y, block.z, "air");
+    }
+    
+    // Rebuild affected chunks ONCE (not per block!)
+    for (const chunkK of affectedChunks) {
+      const [cx, cz] = chunkK.split(',').map(Number);
+      rebuildChunk(cx, cz);
+    }
+    
+    // Send server updates in background (don't await, don't block)
+    if (!isGuest) {
+      // Break blocks on server asynchronously
+      for (const block of blocksToBreak) {
+        breakBlockServer(world_id, block.x, block.y, block.z).catch(err => {
+          console.warn('[Tree] Server break failed:', err);
+        });
+      }
     }
   }
 }
-
 
 function hasLogBelow(x, y, z, maxDepth){
   // Check if there's a log within maxDepth blocks below
@@ -3736,113 +3691,125 @@ window.clearDatabaseBlocks = async function() {
 };
 
 // =======================
-
-let _authInitInFlight = false;
-let _authInitKeyDone = "";
-let _enterConfirmed = false;
-let _pendingSession = null;
-
-async function initGameForSession(sess){
-  // prevent overlapping inits
-  if (_authInitInFlight) return;
-  const uid = sess?.user?.id || "";
-  const slug = getSelectedWorldSlug ? getSelectedWorldSlug() : "overworld";
-  const key = `${uid}|${slug}`;
-  if (_authInitKeyDone === key) return;
-  _authInitInFlight = true;
-  try{
-    // Ensure materials are ready BEFORE any chunks/edits
-    await ensureMaterialsLoaded();
-
-    isGuest = isAnonymousSession(sess);
-    spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
-
-    if (uid){
-      setStatus("Auth OK. Syncing profile...");
-      try{
-        selfUsername = await ensurePlayerProfile(sess);
-        console.log("[Profile] Username:", selfUsername);
-        await refreshSelfProfile();
-      } catch (err){
-        console.error("[Profile] Profile sync failed (continuing):", err);
-        setStatus("Profile sync delayed (continuing)...");
-      }
+// LOGIN FLOW BOOTSTRAP
+// =======================
+supabase.auth.onAuthStateChange(async (_event, sess) => {
+  setSessionUserId(sess);
+  isGuest = isAnonymousSession(sess);
+  spawnProtectUntil = performance.now() + (SPAWN_PROTECT_SECONDS * 1000);
+  if (sess?.user?.id){
+    setStatus("Auth OK. Creating profile...");
+    try {
+      // Create profile if doesn't exist
+      selfUsername = await ensurePlayerProfile(sess);
+      console.log("[Profile] Username:", selfUsername);
+      
+      // Then refresh to get role and mute status
+      await refreshSelfProfile();
+    } catch (err) {
+      console.error("[Profile] Failed to create profile:", err);
+      setStatus("Profile creation failed: " + err.message);
+      return;
     }
-
+    
     startMobTickerIfAllowed();
-
+    
     setStatus("Joining world...");
-    await ensureWorld();
-
+    await ensureWorld(); // CRITICAL: Get worldId for multiplayer
+    
     setStatus("World joined. Generating spawn...");
-
+    
+    // Force initial chunk generation around spawn FIRST
     const [spawnCx, spawnCz] = worldToChunk(SPAWN_X, SPAWN_Z);
-    for (let dx=-1; dx<=1; dx++){
-      for (let dz=-1; dz<=1; dz++){
-        buildChunk(spawnCx+dx, spawnCz+dz);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        buildChunk(spawnCx + dx, spawnCz + dz);
       }
     }
-
+    
     console.log(`[Spawn] Chunks built, looking for ground at (${SPAWN_X}, ${SPAWN_Z})`);
-
+    
     // NOW find solid ground by scanning down
-    let sy = 80;
+    let sy = 80; // Start high
     let foundGround = false;
+    
     for (let y = 80; y >= MIN_Y; y--) {
       const code = getBlockCode(SPAWN_X, y, SPAWN_Z);
       if (code && code !== "air" && code !== "water") {
-        sy = y + 2;
+        sy = y + 2; // Spawn 2 blocks above solid ground
         foundGround = true;
         console.log(`[Spawn] Found ground: ${code} at Y=${y}, spawning at Y=${sy}`);
         break;
       }
     }
+    
+    // Fallback if no ground found
     if (!foundGround) {
-      console.warn("[Spawn] No ground found, using default spawn height");
+      console.warn("[Spawn] No ground found after scanning, using default Y=35");
+      sy = 35;
     }
-
-    // Set spawn position safely (player.pos may not exist in this build)
-    if (controls && controls.object && controls.object.position && typeof controls.object.position.set === 'function') {
-      controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
-    }
-    player.x = SPAWN_X + 0.5; player.y = sy; player.z = SPAWN_Z + 0.5;
-    // Reset movement safely (player.vel may not exist in this build)
-    player.velocityY = 0;
-    player.vx = 0; player.vz = 0;
-    window.__velX = 0; window.__velZ = 0; // legacy helpers
-
+    
+    controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    
+    setStatus("Loading...");
     loadCachedEdits(worldId);
-    subscribeRealtime();
+    
+    subscribeRealtime(); // Now worldId is set, multiplayer will work
+    
+    // Load mobs and start AI ticker
+    loadMobs().then(() => {
+      console.log("[Mobs] Loaded and spawned");
+      startMobTickerIfAllowed();
+    }).catch(err => {
+      console.warn("[Mobs] Failed to load:", err.message);
+    });
+    
+    // Load passive animals
+    loadAnimals().then(() => {
+      console.log("[Animals] Loaded and grazing");
+    }).catch(err => {
+      console.warn("[Animals] Failed to load:", err.message);
+    });
+    
+    // PHASE 3: Initialize combat system
+    setupCombat();
+    
+    setHint((isGuest ? "Guest session. " : "") + (isMobile()
+      ? "Left: move • Right: look • Tap: break • Double-tap: place"
+      : "WASD move • Mouse look (click to lock) • Left click: break • Right click: place") + " | Console: resetWorld() to clear corrupted data");
 
-    hideAuthPanelShowGame(); // ensure UI flips even if profile sync was delayed
-    _authInitKeyDone = key;
-  } finally{
-    _authInitInFlight = false;
+    // Hide auth panel after login, show game
+    const authPanel = document.getElementById("auth");
+    const gameContainer = document.getElementById("game-container");
+    
+    if (authPanel) {
+      authPanel.classList.add('hidden');
+      console.log("[Auth] Auth panel hidden - user logged in");
+    } else {
+      console.error("[Auth] Cannot find auth panel element!");
+    }
+    
+    if (gameContainer) {
+      gameContainer.classList.add('active');
+      console.log("[Auth] Game container visible");
+    } else {
+      console.error("[Auth] Cannot find game container!");
+    }
+    
+    if (chat.root) chat.root.style.display = "";
+  } else {
+    // Not logged in - show auth, hide game
+    clearRealtime();
+    
+    const authPanel = document.getElementById("auth");
+    const gameContainer = document.getElementById("game-container");
+    
+    if (authPanel) authPanel.classList.remove('hidden');
+    if (gameContainer) gameContainer.classList.remove('active');
+    
+    if (chat.root) chat.root.style.display = "none";
+    if (chat.messages) chat.messages.innerHTML = "";
   }
-}
-
-// LOGIN FLOW BOOTSTRAP
-// =======================
-supabase.auth.onAuthStateChange(async (_event, sess) => {
-  setSessionUserId(sess);
-  _pendingSession = sess;
-
-  if (!sess?.user?.id){
-    _authInitKeyDone = "";
-    _enterConfirmed = false;
-    showAuthPanelHideGame();
-    return;
-  }
-
-  // If a session already exists (Supabase persists), require an explicit click to enter world.
-  if (!_enterConfirmed){
-    setStatus("Session detected. Click Log In / Enter to continue.");
-    // keep auth panel visible until user confirms
-    showAuthPanelHideGame();
-    return;
-  }
-
-  await initGameForSession(sess);
 });
 
 // =======================
