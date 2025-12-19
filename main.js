@@ -3801,8 +3801,15 @@ async function initGameForSession(sess){
       console.warn("[Spawn] No ground found, using default spawn height");
     }
 
-    player.pos.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
-    player.vel.set(0,0,0);
+    // Set spawn position safely (player.pos may not exist in this build)
+    if (controls && controls.object && controls.object.position && typeof controls.object.position.set === 'function') {
+      controls.object.position.set(SPAWN_X + 0.5, sy, SPAWN_Z + 0.5);
+    }
+    player.x = SPAWN_X + 0.5; player.y = sy; player.z = SPAWN_Z + 0.5;
+    // Reset movement safely (player.vel may not exist in this build)
+    player.velocityY = 0;
+    player.vx = 0; player.vz = 0;
+    window.__velX = 0; window.__velZ = 0; // legacy helpers
 
     loadCachedEdits(worldId);
     subscribeRealtime();
