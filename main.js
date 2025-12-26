@@ -5869,7 +5869,7 @@ console.log("[Debug] Try: DEBUG.testArea() - View 5x5 height map");
 // === V62: MOBILE CONTROLS ===
 // =======================
 
-mobileMode = 'destroy'; // 'build' or 'destroy' (assigned; declared earlier)
+mobileMode = 'destroy'; // 'build' or 'destroy'
 let selectedSlotIndex = 0;
 
 // Mode toggle button
@@ -5884,7 +5884,7 @@ if (mobileModeBtn) {
   });
 }
 
-function updateMobileMode() {
+updateMobileMode = function () {
   if (!mobileModeBtn) return;
   
   if (mobileMode === 'build') {
@@ -5898,7 +5898,7 @@ function updateMobileMode() {
     mobileModeIcon.textContent = '🔨';
     showModeIndicator('BREAK MODE');
   }
-}
+};
 
 function showModeIndicator(text) {
   if (!modeIndicator) return;
