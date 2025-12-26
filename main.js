@@ -5965,7 +5965,7 @@ if (isMobile()) {
   }
 }
 
-async function handleMobileTap() {
+handleMobileTap = async function () {
   if (!controls || !controls.isLocked) return;
   
   if (mobileMode === 'destroy') {
