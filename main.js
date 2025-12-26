@@ -5869,7 +5869,7 @@ console.log("[Debug] Try: DEBUG.testArea() - View 5x5 height map");
 // === V62: MOBILE CONTROLS ===
 // =======================
 
-let mobileMode = 'destroy'; // 'build' or 'destroy'
+mobileMode = 'destroy'; // 'build' or 'destroy' (assigned; declared earlier)
 let selectedSlotIndex = 0;
 
 // Mode toggle button
